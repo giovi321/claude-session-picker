@@ -712,9 +712,7 @@ def render(metas, cursor, top, query, sort_mode, rows, cols):
 
     time_w = 4
     proj_w = min(30, max(14, cols // 4))
-    rest = cols - time_w - proj_w - 4
-    if rest < 10:
-        rest = 10
+    rest = max(0, cols - time_w - proj_w - 4)
 
     for r in range(rows):
         idx = top + r
