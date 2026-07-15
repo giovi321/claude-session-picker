@@ -642,6 +642,7 @@ K_UP, K_DOWN, K_PGUP, K_PGDN, K_HOME, K_END = (
     "END",
 )
 K_ENTER, K_ESC, K_BS, K_TAB, K_CTRLC = "ENTER", "ESC", "BS", "TAB", "CTRLC"
+K_DEL = "DEL"
 
 
 if os.name == "nt":
@@ -656,7 +657,7 @@ if os.name == "nt":
         "Q": K_PGDN,
         "G": K_HOME,
         "O": K_END,
-        "S": K_BS,  # delete key -> treat as backspace
+        "S": K_DEL,  # delete key -> delete the highlighted session
     }
 
     def read_key():
@@ -686,6 +687,7 @@ else:
     _POSIX_SEQ = {
         "[A": K_UP,
         "[B": K_DOWN,
+        "[3~": K_DEL,
         "[5~": K_PGUP,
         "[6~": K_PGDN,
         "[H": K_HOME,
@@ -817,7 +819,17 @@ def render(metas, cursor, top, query, sort_mode, rows, cols):
     sys.stdout.flush()
 
 
-def interactive_select(metas, initial_query="", sort_mode="recent"):
+def confirm_prompt(message, cols):
+    """Show an inline y/N confirmation in the footer area and block for a
+    single keypress. Returns True only for an explicit y/Y; everything
+    else (including Esc, Ctrl-C, or a dropped keypress) cancels."""
+    _write(CSI + "2K" + BOLD + clip(message, cols) + RESET)
+    sys.stdout.flush()
+    key = read_key()
+    return key in ("y", "Y")
+
+
+def interactive_select(metas, initial_query="", sort_mode="recent", trash_mode=False):
     """Return the chosen meta dict, or None if cancelled."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError("interactive picker needs a TTY (use --list / --json)")
@@ -875,6 +887,25 @@ def interactive_select(metas, initial_query="", sort_mode="recent"):
                     view = apply_filter(sort_metas(all_metas, SORT_MODES[sort_idx]), query)
                     cursor = view.index(keep) if keep in view else 0
                     top = 0
+                elif key == K_DEL:
+                    if view:
+                        target = view[cursor]
+                        verb = "Permanently delete" if trash_mode else "Delete"
+                        if confirm_prompt(f'{verb} "{target["title"]}"? y/N', cols):
+                            try:
+                                if trash_mode:
+                                    os.remove(target["path"])
+                                else:
+                                    move_to_trash(target["path"])
+                            except OSError as e:
+                                sys.stderr.write(f"warning: could not delete session: {e}\n")
+                            else:
+                                all_metas.remove(target)
+                                view = apply_filter(
+                                    sort_metas(all_metas, SORT_MODES[sort_idx]), query
+                                )
+                                if cursor >= len(view):
+                                    cursor = max(0, len(view) - 1)
                 elif key == K_BS:
                     if query:
                         query = query[:-1]
