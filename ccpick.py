@@ -723,15 +723,22 @@ def render(metas, cursor, top, query, sort_mode, rows, cols):
             out.append("\r\n")
             continue
         m = metas[idx]
-        line = (
-            f"{rel_time(m['lastTs']):>{time_w}}  "
-            f"{pad(project_label(m['cwd']), proj_w)}  "
-            f"{clip(m['title'], rest)}"
-        )
         if idx == cursor:
+            line = (
+                f"{rel_time(m['lastTs']):>{time_w}}  "
+                f"{pad(project_label(m['cwd']), proj_w)}  "
+                f"{clip(m['title'], rest)}"
+            )
             out.append(INV + pad(line, cols) + RESET)
         else:
-            out.append(clip(line, cols))
+            title_frag = colorize_title(
+                m['title'], rest, title_highlights(query, m['title'])
+            )
+            out.append(
+                f"{rel_time(m['lastTs']):>{time_w}}  "
+                f"{pad(project_label(m['cwd']), proj_w)}  "
+                f"{title_frag}"
+            )
         out.append("\r\n")
 
     # Footer: detail of the highlighted row + preview.
