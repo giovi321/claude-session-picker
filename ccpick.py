@@ -332,6 +332,23 @@ def restore_from_trash(trash_session_path):
     return dst
 
 
+def purge_expired_trash(retention_days):
+    """Permanently delete trashed sessions whose mtime is older than
+    retention_days. Returns the number of files purged."""
+    if not os.path.isdir(TRASH_DIR):
+        return 0
+    cutoff = time.time() - retention_days * 86400
+    purged = 0
+    for path in glob.glob(os.path.join(TRASH_DIR, "*", "*.jsonl")):
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                purged += 1
+        except OSError:
+            continue
+    return purged
+
+
 # --------------------------------------------------------------------------- #
 # Fuzzy matching
 # --------------------------------------------------------------------------- #

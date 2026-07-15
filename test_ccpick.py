@@ -159,5 +159,40 @@ class TrashPathTests(unittest.TestCase):
         self.assertEqual(restored_path, live_path)
 
 
+class PurgeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.orig_trash = ccpick.TRASH_DIR
+        ccpick.TRASH_DIR = os.path.join(self.tmp.name, "trash")
+        self.addCleanup(self._restore_globals)
+
+    def _restore_globals(self):
+        ccpick.TRASH_DIR = self.orig_trash
+
+    def _make_trashed(self, name, age_days):
+        d = os.path.join(ccpick.TRASH_DIR, "proj")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{}\n")
+        stamp = time.time() - age_days * 86400
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_purge_removes_only_expired(self):
+        old_path = self._make_trashed("old.jsonl", age_days=40)
+        new_path = self._make_trashed("new.jsonl", age_days=5)
+
+        purged = ccpick.purge_expired_trash(retention_days=30)
+
+        self.assertEqual(purged, 1)
+        self.assertFalse(os.path.exists(old_path))
+        self.assertTrue(os.path.exists(new_path))
+
+    def test_purge_empty_trash_dir(self):
+        self.assertEqual(ccpick.purge_expired_trash(retention_days=30), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
