@@ -21,11 +21,13 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import unicodedata
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
 PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
+TRASH_DIR = os.path.join(HOME, ".claude", "ccpick-trash")
 CACHE_PATH = os.path.join(HOME, ".claude", "ccpick-cache.json")
 CACHE_VERSION = 3
 
@@ -288,6 +290,46 @@ def sort_metas(metas, mode):
     if mode == "title":
         return sorted(metas, key=lambda m: (m["title"] or "").lower())
     return sorted(metas, key=lambda m: m["lastTs"] or "", reverse=True)  # recent
+
+
+# --------------------------------------------------------------------------- #
+# Trash (soft delete / restore / purge)
+# --------------------------------------------------------------------------- #
+def _mirror_path(path, src_root, dst_root):
+    """Map a session path from one root (PROJECTS_DIR or TRASH_DIR) to its
+    mirrored location under the other, preserving the
+    <encoded-project-dir>/<session-id>.jsonl structure."""
+    rel = os.path.relpath(path, src_root)
+    return os.path.join(dst_root, rel)
+
+
+def trash_path_for(session_path):
+    return _mirror_path(session_path, PROJECTS_DIR, TRASH_DIR)
+
+
+def live_path_for(trash_session_path):
+    return _mirror_path(trash_session_path, TRASH_DIR, PROJECTS_DIR)
+
+
+def move_to_trash(session_path):
+    """Soft-delete: move a live session's .jsonl into its mirrored trash
+    location, stamping its mtime to now so retention can be measured from
+    the filesystem alone (no separate manifest). Returns the trash path."""
+    dst = trash_path_for(session_path)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(session_path, dst)
+    now = time.time()
+    os.utime(dst, (now, now))
+    return dst
+
+
+def restore_from_trash(trash_session_path):
+    """Move a trashed session back to its live location. Returns the live
+    path."""
+    dst = live_path_for(trash_session_path)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(trash_session_path, dst)
+    return dst
 
 
 # --------------------------------------------------------------------------- #

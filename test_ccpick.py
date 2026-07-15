@@ -1,6 +1,8 @@
 """Unit tests for ccpick's pure, TTY-independent functions."""
 import os
 import sys
+import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -112,6 +114,49 @@ class HighlightTests(unittest.TestCase):
 
     def test_title_highlights_empty_query(self):
         self.assertEqual(ccpick.title_highlights("", "anything"), set())
+
+
+class TrashPathTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.orig_projects = ccpick.PROJECTS_DIR
+        self.orig_trash = ccpick.TRASH_DIR
+        ccpick.PROJECTS_DIR = os.path.join(self.tmp.name, "projects")
+        ccpick.TRASH_DIR = os.path.join(self.tmp.name, "trash")
+        self.addCleanup(self._restore_globals)
+
+    def _restore_globals(self):
+        ccpick.PROJECTS_DIR = self.orig_projects
+        ccpick.TRASH_DIR = self.orig_trash
+
+    def test_trash_path_for_mirrors_structure(self):
+        live = os.path.join(ccpick.PROJECTS_DIR, "encoded-proj", "sess1.jsonl")
+        expected = os.path.join(ccpick.TRASH_DIR, "encoded-proj", "sess1.jsonl")
+        self.assertEqual(ccpick.trash_path_for(live), expected)
+
+    def test_round_trip(self):
+        live = os.path.join(ccpick.PROJECTS_DIR, "encoded-proj", "sess1.jsonl")
+        trashed = ccpick.trash_path_for(live)
+        self.assertEqual(ccpick.live_path_for(trashed), live)
+
+    def test_move_to_trash_and_restore(self):
+        live_dir = os.path.join(ccpick.PROJECTS_DIR, "encoded-proj")
+        os.makedirs(live_dir)
+        live_path = os.path.join(live_dir, "sess1.jsonl")
+        with open(live_path, "w", encoding="utf-8") as fh:
+            fh.write('{"type": "user"}\n')
+
+        trash_path = ccpick.move_to_trash(live_path)
+
+        self.assertFalse(os.path.exists(live_path))
+        self.assertTrue(os.path.exists(trash_path))
+
+        restored_path = ccpick.restore_from_trash(trash_path)
+
+        self.assertFalse(os.path.exists(trash_path))
+        self.assertTrue(os.path.exists(restored_path))
+        self.assertEqual(restored_path, live_path)
 
 
 if __name__ == "__main__":
