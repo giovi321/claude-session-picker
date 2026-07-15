@@ -841,7 +841,7 @@ def confirm_prompt(message, cols):
     """Show an inline y/N confirmation in the footer area and block for a
     single keypress. Returns True only for an explicit y/Y; everything
     else (including Esc, Ctrl-C, or a dropped keypress) cancels."""
-    _write(CSI + "2K" + BOLD + clip(message, cols) + RESET)
+    _write("\r" + CSI + "2K" + BOLD + clip(message, cols) + RESET)
     sys.stdout.flush()
     key = read_key()
     return key in ("y", "Y")
