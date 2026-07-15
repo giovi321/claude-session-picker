@@ -392,18 +392,18 @@ def haystack(m):
 
 
 def match(query, m):
-    """Token-AND substring match. Empty query matches everything. Returns a
-    sort score (lower = better) or None for no match."""
+    """Fuzzy token-AND match. Empty query matches everything. Returns a
+    sort score (lower = better) or None if any token fails to fuzzy-match."""
     if not query:
         return 0
     h = haystack(m)
-    score = 0
+    total = 0
     for tok in query.lower().split():
-        idx = h.find(tok)
-        if idx < 0:
+        result = fuzzy_score(tok, h)
+        if result is None:
             return None
-        score += idx
-    return score
+        total += result[0]
+    return total
 
 
 def apply_filter(metas, query):

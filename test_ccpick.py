@@ -40,5 +40,29 @@ class FuzzyScoreTests(unittest.TestCase):
         self.assertEqual(ccpick.fuzzy_score("", "anything"), (0, []))
 
 
+class MatchFilterTests(unittest.TestCase):
+    def _meta(self, title="", cwd="", branch="", prompt=""):
+        return {"title": title, "cwd": cwd, "gitBranch": branch, "firstPrompt": prompt}
+
+    def test_empty_query_matches_everything(self):
+        self.assertEqual(ccpick.match("", self._meta(title="anything")), 0)
+
+    def test_single_token_fuzzy_match(self):
+        m = self._meta(title="claude-session-picker")
+        self.assertIsNotNone(ccpick.match("cspkr", m))
+
+    def test_no_match_returns_none(self):
+        m = self._meta(title="claude-session-picker")
+        self.assertIsNone(ccpick.match("xyz", m))
+
+    def test_multi_token_and_semantics(self):
+        m = self._meta(title="ccpick", cwd=r"C:\git\obsidian-wiki", branch="n8n-fix")
+        self.assertIsNotNone(ccpick.match("obsidian n8n", m))
+
+    def test_multi_token_all_must_match(self):
+        m = self._meta(title="ccpick", cwd=r"C:\git\obsidian-wiki")
+        self.assertIsNone(ccpick.match("obsidian n8n", m))
+
+
 if __name__ == "__main__":
     unittest.main()
