@@ -299,87 +299,87 @@ CONSECUTIVE_BONUS = 5
 
 
 def _is_word_boundary(s, j):
-	"""True if position j in s starts a new 'word' -- position 0, or
-	immediately preceded by a separator character."""
-	return j == 0 or s[j - 1] in SEPARATORS
+    """True if position j in s starts a new 'word' -- position 0, or
+    immediately preceded by a separator character."""
+    return j == 0 or s[j - 1] in SEPARATORS
 
 
 def fuzzy_score(token, haystack):
-	"""Optimal fuzzy subsequence alignment of ``token`` inside
-	``haystack`` (case-insensitive), fzf/Sublime-style: contiguous runs
-	and word-boundary matches score better, gaps score worse. Returns
-	``(score, matched_indices)`` -- lower score is a better match,
-	``matched_indices`` are positions in ``haystack`` in ascending order,
-	one per character of ``token`` -- or ``None`` if ``token``'s
-	characters don't all appear, in order, somewhere in ``haystack``."""
-	token = token.lower()
-	haystack = haystack.lower()
-	m, n = len(token), len(haystack)
-	if m == 0:
-		return (0, [])
-	if m > n:
-		return None
+    """Optimal fuzzy subsequence alignment of ``token`` inside
+    ``haystack`` (case-insensitive), fzf/Sublime-style: contiguous runs
+    and word-boundary matches score better, gaps score worse. Returns
+    ``(score, matched_indices)`` -- lower score is a better match,
+    ``matched_indices`` are positions in ``haystack`` in ascending order,
+    one per character of ``token`` -- or ``None`` if ``token``'s
+    characters don't all appear, in order, somewhere in ``haystack``."""
+    token = token.lower()
+    haystack = haystack.lower()
+    m, n = len(token), len(haystack)
+    if m == 0:
+        return (0, [])
+    if m > n:
+        return None
 
-	# Cheap rejection: a plain left-to-right subsequence scan. Most
-	# candidates fail this while the user is still typing, so the
-	# expensive DP below only runs on sessions that can possibly match.
-	scan = 0
-	for ch in token:
-		scan = haystack.find(ch, scan)
-		if scan == -1:
-			return None
-		scan += 1
+    # Cheap rejection: a plain left-to-right subsequence scan. Most
+    # candidates fail this while the user is still typing, so the
+    # expensive DP below only runs on sessions that can possibly match.
+    scan = 0
+    for ch in token:
+        scan = haystack.find(ch, scan)
+        if scan == -1:
+            return None
+        scan += 1
 
-	UNREACHABLE = float("inf")
-	# parent[i][j]: haystack index used for token[i - 1] in the best
-	# alignment that matches token[i] at haystack index j.
-	parent = [[-1] * n for _ in range(m)]
-	row = [UNREACHABLE] * n
-	for j in range(n):
-		if haystack[j] == token[0]:
-			bonus = BOUNDARY_BONUS if _is_word_boundary(haystack, j) else 0
-			row[j] = j - bonus
+    UNREACHABLE = float("inf")
+    # parent[i][j]: haystack index used for token[i - 1] in the best
+    # alignment that matches token[i] at haystack index j.
+    parent = [[-1] * n for _ in range(m)]
+    row = [UNREACHABLE] * n
+    for j in range(n):
+        if haystack[j] == token[0]:
+            bonus = BOUNDARY_BONUS if _is_word_boundary(haystack, j) else 0
+            row[j] = j - bonus
 
-	for i in range(1, m):
-		new_row = [UNREACHABLE] * n
-		# best_gap tracks min(row[j'] - j') for every j' < (current j - 1)
-		# seen so far, so the "skip some characters" case can be evaluated
-		# in O(1) per j instead of rescanning all earlier j' each time.
-		best_gap = UNREACHABLE
-		best_gap_idx = -1
-		for j in range(1, n):
-			prior = j - 1
-			if row[prior] != UNREACHABLE:
-				candidate = row[prior] - prior
-				if candidate < best_gap:
-					best_gap, best_gap_idx = candidate, prior
-			if haystack[j] != token[i]:
-				continue
-			bonus = BOUNDARY_BONUS if _is_word_boundary(haystack, j) else 0
-			best_score, best_from = UNREACHABLE, -1
-			if row[prior] != UNREACHABLE:
-				best_score, best_from = row[prior] - CONSECUTIVE_BONUS, prior
-			if best_gap != UNREACHABLE:
-				gapped = best_gap + prior
-				if gapped < best_score:
-					best_score, best_from = gapped, best_gap_idx
-			new_row[j] = best_score - bonus
-			parent[i][j] = best_from
-		row = new_row
+    for i in range(1, m):
+        new_row = [UNREACHABLE] * n
+        # best_gap tracks min(row[j'] - j') for every j' < (current j - 1)
+        # seen so far, so the "skip some characters" case can be evaluated
+        # in O(1) per j instead of rescanning all earlier j' each time.
+        best_gap = UNREACHABLE
+        best_gap_idx = -1
+        for j in range(1, n):
+            prior = j - 1
+            if row[prior] != UNREACHABLE:
+                candidate = row[prior] - prior
+                if candidate < best_gap:
+                    best_gap, best_gap_idx = candidate, prior
+            if haystack[j] != token[i]:
+                continue
+            bonus = BOUNDARY_BONUS if _is_word_boundary(haystack, j) else 0
+            best_score, best_from = UNREACHABLE, -1
+            if row[prior] != UNREACHABLE:
+                best_score, best_from = row[prior] - CONSECUTIVE_BONUS, prior
+            if best_gap != UNREACHABLE:
+                gapped = best_gap + prior
+                if gapped < best_score:
+                    best_score, best_from = gapped, best_gap_idx
+            new_row[j] = best_score - bonus
+            parent[i][j] = best_from
+        row = new_row
 
-	best_j, best_score = -1, UNREACHABLE
-	for j in range(n):
-		if row[j] < best_score:
-			best_score, best_j = row[j], j
-	if best_j == -1:
-		return None
+    best_j, best_score = -1, UNREACHABLE
+    for j in range(n):
+        if row[j] < best_score:
+            best_score, best_j = row[j], j
+    if best_j == -1:
+        return None
 
-	indices = [0] * m
-	j = best_j
-	for i in range(m - 1, -1, -1):
-		indices[i] = j
-		j = parent[i][j]
-	return (best_score, indices)
+    indices = [0] * m
+    j = best_j
+    for i in range(m - 1, -1, -1):
+        indices[i] = j
+        j = parent[i][j]
+    return (best_score, indices)
 
 
 # --------------------------------------------------------------------------- #
