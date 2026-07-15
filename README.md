@@ -2,6 +2,8 @@
 
 Interactive picker to resume any Claude Code session from any project.
 
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 Claude Code stores one JSONL transcript per session under
 `~/.claude/projects/<encoded-project-dir>/<session-id>.jsonl`. The built-in
 `claude --resume` (and `/resume`) only lists sessions for the current working
