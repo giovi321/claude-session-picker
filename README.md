@@ -4,6 +4,38 @@ Interactive picker to resume any Claude Code session from any project.
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
+## Quick start
+
+Clone the repo, then install a `ccpick` alias for your shell so you never
+type `python ccpick.py` again.
+
+**Windows (PowerShell)**
+
+```powershell
+git clone https://github.com/giovi321/claude-session-picker.git
+cd claude-session-picker
+./install.ps1
+. $PROFILE
+```
+
+**macOS / Linux (bash or zsh)**
+
+```sh
+git clone https://github.com/giovi321/claude-session-picker.git
+cd claude-session-picker
+./install.sh
+source ~/.zshrc   # or ~/.bashrc -- whichever the installer picked
+```
+
+Then from any directory, on any OS:
+
+```
+ccpick
+```
+
+See [Install as a `ccpick` quick command](#install-as-a-ccpick-quick-command)
+below for what the installers do, how to uninstall, and manual alternatives.
+
 Claude Code stores one JSONL transcript per session under
 `~/.claude/projects/<encoded-project-dir>/<session-id>.jsonl`. The built-in
 `claude --resume` (and `/resume`) only lists sessions for the current working
