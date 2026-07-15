@@ -63,6 +63,14 @@ class MatchFilterTests(unittest.TestCase):
         m = self._meta(title="ccpick", cwd=r"C:\git\obsidian-wiki")
         self.assertIsNone(ccpick.match("obsidian n8n", m))
 
+    def test_fuzzy_and_substring_combined(self):
+        m = self._meta(title="claude-session-picker", cwd=r"C:\git\obsidian-wiki")
+        self.assertIsNotNone(ccpick.match("cspkr obsidian", m))
+
+    def test_fuzzy_token_and_missing_token_fails(self):
+        m = self._meta(title="claude-session-picker", cwd=r"C:\git\obsidian-wiki")
+        self.assertIsNone(ccpick.match("cspkr n8n", m))
+
 
 if __name__ == "__main__":
     unittest.main()
