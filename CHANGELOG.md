@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.1
+
+- Fix `project_label()` unconditionally rendering with a backslash separator, which showed paths like `giovanni\project` on macOS/Linux instead of `giovanni/project`. The project column now always displays with the current platform's native separator regardless of how the path was recorded.
+
 ## v0.1.0
 
 Initial release.

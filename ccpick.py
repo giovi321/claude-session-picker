@@ -519,16 +519,21 @@ def rel_time(iso):
 
 
 def project_label(cwd):
+    """Compact "parent/leaf"-style label for a project directory. Accepts
+    either slash style on input (recorded cwds may use either) but always
+    displays with the current platform's separator, so POSIX paths don't
+    render with stray backslashes."""
     if not cwd:
         return "?"
-    p = cwd.replace("/", "\\")
-    if p.rstrip("\\").lower() == HOME.replace("/", "\\").rstrip("\\").lower():
+    norm = cwd.replace("\\", "/")
+    home_norm = HOME.replace("\\", "/")
+    if norm.rstrip("/").lower() == home_norm.rstrip("/").lower():
         return "~"
-    parts = [x for x in p.split("\\") if x]
+    parts = [x for x in norm.split("/") if x]
     if not parts:
-        return p
+        return cwd
     if len(parts) >= 2:
-        return parts[-2] + "\\" + parts[-1]
+        return parts[-2] + os.sep + parts[-1]
     return parts[-1]
 
 

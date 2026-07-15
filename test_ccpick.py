@@ -217,5 +217,25 @@ class TrashScanTests(unittest.TestCase):
         self.assertEqual(ccpick.trash_session_files(), [path])
 
 
+class ProjectLabelTests(unittest.TestCase):
+    def test_posix_style_path_uses_native_separator(self):
+        expected = "giovanni" + os.sep + "project"
+        self.assertEqual(ccpick.project_label("/home/giovanni/project"), expected)
+
+    def test_windows_style_path_uses_native_separator(self):
+        expected = "Giovanni" + os.sep + "project"
+        self.assertEqual(ccpick.project_label(r"C:\Users\Giovanni\project"), expected)
+
+    def test_single_component_path(self):
+        self.assertEqual(ccpick.project_label("/home"), "home")
+
+    def test_home_directory_returns_tilde(self):
+        self.assertEqual(ccpick.project_label(ccpick.HOME), "~")
+
+    def test_empty_cwd_returns_question_mark(self):
+        self.assertEqual(ccpick.project_label(""), "?")
+        self.assertEqual(ccpick.project_label(None), "?")
+
+
 if __name__ == "__main__":
     unittest.main()
