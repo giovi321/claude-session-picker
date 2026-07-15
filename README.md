@@ -18,6 +18,7 @@ session interactively, then resumes it in its original directory.
 - On select: launches `claude --resume <id>` in the session's original directory
 - Head+tail parsing never loads multi-MB transcripts fully; results cached by mtime+size so repeat launches are instant
 - Zero third-party dependencies (Python 3 standard library), works on Windows and POSIX
+- Delete a session to a recoverable trash folder (`Delete` key); browse/restore trash with `--trash`; auto-purges after a configurable retention period
 
 ## Requirements
 
@@ -48,6 +49,7 @@ python ccpick.py --refresh       # ignore the cache and rescan
 | Tab | cycle sort mode |
 | Backspace | edit filter |
 | Enter | resume selected session |
+| Delete | delete the highlighted session (moves to trash; permanently removes in `--trash` mode) |
 | Esc / Ctrl-C | cancel |
 
 ## Install as a `ccpick` quick command
@@ -101,6 +103,8 @@ ln -s /path/to/claude-session-picker/ccpick.sh ~/.local/bin/ccpick
 | `-n`, `--limit N` | show at most N sessions |
 | `--refresh` | ignore the metadata cache and rescan |
 | `--no-launch` | print the `cd` + resume command instead of launching |
+| `--trash` | browse trash instead of live sessions (`Enter` restores, `Delete` permanently removes) |
+| `--purge-after N` | trash retention in days before auto-purge (default: 30) |
 
 ## Notes
 
@@ -110,3 +114,4 @@ ln -s /path/to/claude-session-picker/ccpick.sh ~/.local/bin/ccpick
 - The metadata cache lives at `~/.claude/ccpick-cache.json` and is rebuilt from
   scratch each run (stale entries for deleted sessions are dropped), reusing
   entries whose file mtime and size are unchanged.
+- Deleted sessions move to `~/.claude/ccpick-trash/` (mirroring the live layout) rather than being removed immediately; browse and restore them with `ccpick --trash`. Expired trash (older than `--purge-after` days, default 30) is purged automatically at the start of every run.

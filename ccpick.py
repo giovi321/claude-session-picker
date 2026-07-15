@@ -977,6 +977,16 @@ def resume(meta, no_launch=False):
         return 1
 
 
+def restore(meta):
+    try:
+        dst = restore_from_trash(meta["path"])
+    except OSError as e:
+        sys.stderr.write(f"error: could not restore session: {e}\n")
+        return 1
+    sys.stderr.write(f"restored {meta['sessionId']}\n  to {dst}\n")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -993,6 +1003,8 @@ def build_parser():
     p.add_argument("-n", "--limit", type=int, default=0, help="show at most N sessions (0 = all)")
     p.add_argument("--refresh", action="store_true", help="ignore the metadata cache and rescan")
     p.add_argument("--no-launch", action="store_true", help="print the cd + resume command instead of launching")
+    p.add_argument("--trash", action="store_true", help="browse trash instead of live sessions (Enter restores, Delete permanently removes)")
+    p.add_argument("--purge-after", type=int, default=30, metavar="N", help="trash retention in days before auto-purge (default: 30)")
     return p
 
 
@@ -1000,10 +1012,20 @@ def main(argv=None):
     reconfigure_streams()
     args = build_parser().parse_args(argv)
 
-    metas = scan(refresh=args.refresh)
-    if not metas:
-        sys.stderr.write(f"no sessions found under {PROJECTS_DIR}\n")
-        return 1
+    purged = purge_expired_trash(args.purge_after)
+    if purged:
+        sys.stderr.write(f"purged {purged} expired trash session(s)\n")
+
+    if args.trash:
+        metas = scan_trash()
+        if not metas:
+            sys.stderr.write(f"no trashed sessions found under {TRASH_DIR}\n")
+            return 1
+    else:
+        metas = scan(refresh=args.refresh)
+        if not metas:
+            sys.stderr.write(f"no sessions found under {PROJECTS_DIR}\n")
+            return 1
 
     if args.project:
         needle = args.project.lower()
@@ -1031,13 +1053,17 @@ def main(argv=None):
         return 1
 
     try:
-        chosen = interactive_select(metas, initial_query=query, sort_mode=args.sort)
+        chosen = interactive_select(
+            metas, initial_query=query, sort_mode=args.sort, trash_mode=args.trash
+        )
     except RuntimeError as e:
         sys.stderr.write(str(e) + "\n")
         return 2
     if chosen is None:
         sys.stderr.write("cancelled\n")
         return 130
+    if args.trash:
+        return restore(chosen)
     return resume(chosen, no_launch=args.no_launch)
 
 
