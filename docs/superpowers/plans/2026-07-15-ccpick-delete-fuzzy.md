@@ -274,21 +274,33 @@ git commit -m "Use fuzzy scorer for ccpick session filtering"
 ### Task 3: Title highlighting helpers
 
 **Files:**
-- Modify: `ccpick.py` — add `clip_prefix` right after the existing `clip()` function; add `colorize_title` and `title_highlights` right before the `# Interactive picker` section header (i.e. right after `pad()`).
+- Modify: `ccpick.py` — add `clip_prefix` immediately before the existing `clip()` function, then replace `clip()`'s body to delegate to it (DRY: the two functions shared near-identical truncation logic; `clip()` becomes a thin wrapper); add `colorize_title` and `title_highlights` right before the `# Interactive picker` section header (i.e. right after `pad()`).
 - Modify: `test_ccpick.py`
 
 **Interfaces:**
-- Consumes: `fuzzy_score` (Task 1), existing `clip`, `char_width`, `display_width`, `BOLD`/`CYAN`/`RESET` constants.
+- Consumes: `fuzzy_score` (Task 1), existing `char_width`, `display_width`, `BOLD`/`CYAN`/`RESET` constants.
 - Produces:
   - `clip_prefix(s: str, n: int) -> tuple[list[str], bool]` — the original characters that fit in `n` display cells, and whether truncation occurred.
   - `colorize_title(title: str, rest_width: int, highlight_idxs: set[int]) -> str` — the row's title fragment, matched characters wrapped in `BOLD + CYAN`.
   - `title_highlights(query: str, title: str) -> set[int]` — union of matched indices (in `title`) across every whitespace-separated query token.
+- Modifies: `clip(s: str, n: int) -> str` — same signature and behavior as before (including the existing no-ellipsis-when-`n<=1` edge case), now implemented in terms of `clip_prefix`.
 
 - [ ] **Step 1: Write the failing tests**
 
 Append to `test_ccpick.py`:
 
 ```python
+class ClipTests(unittest.TestCase):
+    def test_clip_no_truncation(self):
+        self.assertEqual(ccpick.clip("abc", 10), "abc")
+
+    def test_clip_truncates_with_ellipsis(self):
+        self.assertEqual(ccpick.clip("abcdef", 4), "abc…")
+
+    def test_clip_narrow_width_no_ellipsis(self):
+        self.assertEqual(ccpick.clip("abcdef", 1), "a")
+
+
 class HighlightTests(unittest.TestCase):
     def test_clip_prefix_no_truncation(self):
         chars, truncated = ccpick.clip_prefix("abc", 10)
@@ -322,12 +334,12 @@ class HighlightTests(unittest.TestCase):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m unittest test_ccpick.HighlightTests -v`
-Expected: `FAIL` with `AttributeError: module 'ccpick' has no attribute 'clip_prefix'` (and similarly for the other two functions).
+Run: `python -m unittest test_ccpick.ClipTests test_ccpick.HighlightTests -v`
+Expected: `ClipTests` cases `PASS` already (they lock in `clip()`'s existing, unmodified behavior). `HighlightTests` cases `FAIL` with `AttributeError: module 'ccpick' has no attribute 'clip_prefix'` (and similarly for the other two functions).
 
 - [ ] **Step 3: Implement the helpers**
 
-In `ccpick.py`, immediately after the existing `clip()` function, add:
+In `ccpick.py`, immediately before the existing `clip()` function, add `clip_prefix`, then replace `clip()`'s body so it delegates to `clip_prefix` instead of duplicating its logic:
 
 ```python
 def clip_prefix(s, n):
@@ -351,7 +363,16 @@ def clip_prefix(s, n):
         out.append(ch)
         w += cw
     return out, True
+
+
+def clip(s, n):
+    """Truncate to a terminal display width of ``n`` cells (accounting for
+    wide/zero-width characters), appending an ellipsis when truncated."""
+    chars, truncated = clip_prefix(s, n)
+    return "".join(chars) + ("…" if truncated else "")
 ```
+
+This replaces the entire previous `clip()` function definition (do not leave the old body in place alongside the new one).
 
 Then, immediately after the existing `pad()` function (right before the `# Non-interactive output` section header), add:
 
