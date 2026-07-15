@@ -349,6 +349,24 @@ def purge_expired_trash(retention_days):
     return purged
 
 
+def trash_session_files():
+    if not os.path.isdir(TRASH_DIR):
+        return []
+    return glob.glob(os.path.join(TRASH_DIR, "*", "*.jsonl"))
+
+
+def scan_trash():
+    """Parse every trashed session (no cache -- trash is typically small
+    and this only runs for --trash)."""
+    metas = []
+    for path in trash_session_files():
+        try:
+            metas.append(parse_session(path))
+        except Exception:
+            continue
+    return metas
+
+
 # --------------------------------------------------------------------------- #
 # Fuzzy matching
 # --------------------------------------------------------------------------- #

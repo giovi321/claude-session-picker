@@ -194,5 +194,28 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(ccpick.purge_expired_trash(retention_days=30), 0)
 
 
+class TrashScanTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.orig_trash = ccpick.TRASH_DIR
+        ccpick.TRASH_DIR = os.path.join(self.tmp.name, "trash")
+        self.addCleanup(self._restore_globals)
+
+    def _restore_globals(self):
+        ccpick.TRASH_DIR = self.orig_trash
+
+    def test_trash_session_files_empty_when_no_dir(self):
+        self.assertEqual(ccpick.trash_session_files(), [])
+
+    def test_trash_session_files_finds_nested_jsonl(self):
+        d = os.path.join(ccpick.TRASH_DIR, "proj")
+        os.makedirs(d)
+        path = os.path.join(d, "sess1.jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"type": "user"}\n')
+        self.assertEqual(ccpick.trash_session_files(), [path])
+
+
 if __name__ == "__main__":
     unittest.main()
