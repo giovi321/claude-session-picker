@@ -21,11 +21,13 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import unicodedata
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
 PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
+TRASH_DIR = os.path.join(HOME, ".claude", "ccpick-trash")
 CACHE_PATH = os.path.join(HOME, ".claude", "ccpick-cache.json")
 CACHE_VERSION = 3
 
@@ -291,6 +293,173 @@ def sort_metas(metas, mode):
 
 
 # --------------------------------------------------------------------------- #
+# Trash (soft delete / restore / purge)
+# --------------------------------------------------------------------------- #
+def _mirror_path(path, src_root, dst_root):
+    """Map a session path from one root (PROJECTS_DIR or TRASH_DIR) to its
+    mirrored location under the other, preserving the
+    <encoded-project-dir>/<session-id>.jsonl structure."""
+    rel = os.path.relpath(path, src_root)
+    return os.path.join(dst_root, rel)
+
+
+def trash_path_for(session_path):
+    return _mirror_path(session_path, PROJECTS_DIR, TRASH_DIR)
+
+
+def live_path_for(trash_session_path):
+    return _mirror_path(trash_session_path, TRASH_DIR, PROJECTS_DIR)
+
+
+def move_to_trash(session_path):
+    """Soft-delete: move a live session's .jsonl into its mirrored trash
+    location, stamping its mtime to now so retention can be measured from
+    the filesystem alone (no separate manifest). Returns the trash path."""
+    dst = trash_path_for(session_path)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(session_path, dst)
+    now = time.time()
+    os.utime(dst, (now, now))
+    return dst
+
+
+def restore_from_trash(trash_session_path):
+    """Move a trashed session back to its live location. Returns the live
+    path."""
+    dst = live_path_for(trash_session_path)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.move(trash_session_path, dst)
+    return dst
+
+
+def purge_expired_trash(retention_days):
+    """Permanently delete trashed sessions whose mtime is older than
+    retention_days. Returns the number of files purged."""
+    if not os.path.isdir(TRASH_DIR):
+        return 0
+    cutoff = time.time() - retention_days * 86400
+    purged = 0
+    for path in glob.glob(os.path.join(TRASH_DIR, "*", "*.jsonl")):
+        try:
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                purged += 1
+        except OSError:
+            continue
+    return purged
+
+
+def trash_session_files():
+    if not os.path.isdir(TRASH_DIR):
+        return []
+    return glob.glob(os.path.join(TRASH_DIR, "*", "*.jsonl"))
+
+
+def scan_trash():
+    """Parse every trashed session (no cache -- trash is typically small
+    and this only runs for --trash)."""
+    metas = []
+    for path in trash_session_files():
+        try:
+            metas.append(parse_session(path))
+        except Exception:
+            continue
+    return metas
+
+
+# --------------------------------------------------------------------------- #
+# Fuzzy matching
+# --------------------------------------------------------------------------- #
+SEPARATORS = " /\\-_.:"
+BOUNDARY_BONUS = 10
+CONSECUTIVE_BONUS = 5
+
+
+def _is_word_boundary(s, j):
+    """True if position j in s starts a new 'word' -- position 0, or
+    immediately preceded by a separator character."""
+    return j == 0 or s[j - 1] in SEPARATORS
+
+
+def fuzzy_score(token, haystack):
+    """Optimal fuzzy subsequence alignment of ``token`` inside
+    ``haystack`` (case-insensitive), fzf/Sublime-style: contiguous runs
+    and word-boundary matches score better, gaps score worse. Returns
+    ``(score, matched_indices)`` -- lower score is a better match,
+    ``matched_indices`` are positions in ``haystack`` in ascending order,
+    one per character of ``token`` -- or ``None`` if ``token``'s
+    characters don't all appear, in order, somewhere in ``haystack``."""
+    token = token.lower()
+    haystack = haystack.lower()
+    m, n = len(token), len(haystack)
+    if m == 0:
+        return (0, [])
+    if m > n:
+        return None
+
+    # Cheap rejection: a plain left-to-right subsequence scan. Most
+    # candidates fail this while the user is still typing, so the
+    # expensive DP below only runs on sessions that can possibly match.
+    scan = 0
+    for ch in token:
+        scan = haystack.find(ch, scan)
+        if scan == -1:
+            return None
+        scan += 1
+
+    UNREACHABLE = float("inf")
+    # parent[i][j]: haystack index used for token[i - 1] in the best
+    # alignment that matches token[i] at haystack index j.
+    parent = [[-1] * n for _ in range(m)]
+    row = [UNREACHABLE] * n
+    for j in range(n):
+        if haystack[j] == token[0]:
+            bonus = BOUNDARY_BONUS if _is_word_boundary(haystack, j) else 0
+            row[j] = j - bonus
+
+    for i in range(1, m):
+        new_row = [UNREACHABLE] * n
+        # best_gap tracks min(row[j'] - j') for every j' < (current j - 1)
+        # seen so far, so the "skip some characters" case can be evaluated
+        # in O(1) per j instead of rescanning all earlier j' each time.
+        best_gap = UNREACHABLE
+        best_gap_idx = -1
+        for j in range(1, n):
+            prior = j - 1
+            if row[prior] != UNREACHABLE:
+                candidate = row[prior] - prior
+                if candidate < best_gap:
+                    best_gap, best_gap_idx = candidate, prior
+            if haystack[j] != token[i]:
+                continue
+            bonus = BOUNDARY_BONUS if _is_word_boundary(haystack, j) else 0
+            best_score, best_from = UNREACHABLE, -1
+            if row[prior] != UNREACHABLE:
+                best_score, best_from = row[prior] - CONSECUTIVE_BONUS, prior
+            if best_gap != UNREACHABLE:
+                gapped = best_gap + prior
+                if gapped < best_score:
+                    best_score, best_from = gapped, best_gap_idx
+            new_row[j] = best_score - bonus
+            parent[i][j] = best_from
+        row = new_row
+
+    best_j, best_score = -1, UNREACHABLE
+    for j in range(n):
+        if row[j] < best_score:
+            best_score, best_j = row[j], j
+    if best_j == -1:
+        return None
+
+    indices = [0] * m
+    j = best_j
+    for i in range(m - 1, -1, -1):
+        indices[i] = j
+        j = parent[i][j]
+    return (best_score, indices)
+
+
+# --------------------------------------------------------------------------- #
 # Filtering + formatting
 # --------------------------------------------------------------------------- #
 def haystack(m):
@@ -300,18 +469,18 @@ def haystack(m):
 
 
 def match(query, m):
-    """Token-AND substring match. Empty query matches everything. Returns a
-    sort score (lower = better) or None for no match."""
+    """Fuzzy token-AND match. Empty query matches everything. Returns a
+    sort score (lower = better) or None if any token fails to fuzzy-match."""
     if not query:
         return 0
     h = haystack(m)
-    score = 0
+    total = 0
     for tok in query.lower().split():
-        idx = h.find(tok)
-        if idx < 0:
+        result = fuzzy_score(tok, h)
+        if result is None:
             return None
-        score += idx
-    return score
+        total += result[0]
+    return total
 
 
 def apply_filter(metas, query):
@@ -373,15 +542,18 @@ def display_width(s):
     return sum(char_width(c) for c in s)
 
 
-def clip(s, n):
-    """Truncate to a terminal display width of ``n`` cells (accounting for
-    wide/zero-width characters), appending an ellipsis when truncated."""
+def clip_prefix(s, n):
+    """Like clip(), but returns (chars, truncated): the list of original
+    characters that fit within a display width of n cells (reserving room
+    for an ellipsis when truncation is needed) and whether truncation
+    occurred, instead of a single joined+ellipsized string. Lets callers
+    color individual surviving characters before re-joining."""
     if s is None:
         s = ""
     if display_width(s) <= n:
-        return s
+        return list(s), False
     if n <= 1:
-        return s[:1]
+        return list(s[:1]), False
     out = []
     w = 0
     for ch in s:
@@ -390,13 +562,53 @@ def clip(s, n):
             break
         out.append(ch)
         w += cw
-    return "".join(out) + "…"
+    return out, True
+
+
+def clip(s, n):
+    """Truncate to a terminal display width of ``n`` cells (accounting for
+    wide/zero-width characters), appending an ellipsis when truncated."""
+    chars, truncated = clip_prefix(s, n)
+    return "".join(chars) + ("…" if truncated else "")
 
 
 def pad(s, n):
     """Left-justify ``s`` to a display width of ``n`` cells."""
     s = clip(s, n)
     return s + " " * (n - display_width(s))
+
+
+def colorize_title(title, rest_width, highlight_idxs):
+    """Build the title fragment for a picker row within rest_width cells,
+    wrapping characters whose original index is in highlight_idxs with
+    BOLD+CYAN. Falls back to plain clip() output when there is nothing to
+    highlight."""
+    if not highlight_idxs:
+        return clip(title, rest_width)
+    chars, truncated = clip_prefix(title, rest_width)
+    parts = []
+    for i, ch in enumerate(chars):
+        if i in highlight_idxs:
+            parts.append(BOLD + CYAN + ch + RESET)
+        else:
+            parts.append(ch)
+    if truncated:
+        parts.append("…")
+    return "".join(parts)
+
+
+def title_highlights(query, title):
+    """Union of matched character indices (in title) across every
+    whitespace-separated query token, for rendering highlights. Returns an
+    empty set when there is no query or no title."""
+    if not query or not title:
+        return set()
+    idxs = set()
+    for tok in query.lower().split():
+        result = fuzzy_score(tok, title)
+        if result:
+            idxs.update(result[1])
+    return idxs
 
 
 # --------------------------------------------------------------------------- #
@@ -448,6 +660,7 @@ K_UP, K_DOWN, K_PGUP, K_PGDN, K_HOME, K_END = (
     "END",
 )
 K_ENTER, K_ESC, K_BS, K_TAB, K_CTRLC = "ENTER", "ESC", "BS", "TAB", "CTRLC"
+K_DEL = "DEL"
 
 
 if os.name == "nt":
@@ -462,7 +675,7 @@ if os.name == "nt":
         "Q": K_PGDN,
         "G": K_HOME,
         "O": K_END,
-        "S": K_BS,  # delete key -> treat as backspace
+        "S": K_DEL,  # delete key -> delete the highlighted session
     }
 
     def read_key():
@@ -492,6 +705,7 @@ else:
     _POSIX_SEQ = {
         "[A": K_UP,
         "[B": K_DOWN,
+        "[3~": K_DEL,
         "[5~": K_PGUP,
         "[6~": K_PGDN,
         "[H": K_HOME,
@@ -577,9 +791,7 @@ def render(metas, cursor, top, query, sort_mode, rows, cols):
 
     time_w = 4
     proj_w = min(30, max(14, cols // 4))
-    rest = cols - time_w - proj_w - 4
-    if rest < 10:
-        rest = 10
+    rest = max(0, cols - time_w - proj_w - 4)
 
     for r in range(rows):
         idx = top + r
@@ -588,15 +800,22 @@ def render(metas, cursor, top, query, sort_mode, rows, cols):
             out.append("\r\n")
             continue
         m = metas[idx]
-        line = (
-            f"{rel_time(m['lastTs']):>{time_w}}  "
-            f"{pad(project_label(m['cwd']), proj_w)}  "
-            f"{clip(m['title'], rest)}"
-        )
         if idx == cursor:
+            line = (
+                f"{rel_time(m['lastTs']):>{time_w}}  "
+                f"{pad(project_label(m['cwd']), proj_w)}  "
+                f"{clip(m['title'], rest)}"
+            )
             out.append(INV + pad(line, cols) + RESET)
         else:
-            out.append(clip(line, cols))
+            title_frag = colorize_title(
+                m['title'], rest, title_highlights(query, m['title'])
+            )
+            out.append(
+                f"{rel_time(m['lastTs']):>{time_w}}  "
+                f"{pad(project_label(m['cwd']), proj_w)}  "
+                f"{title_frag}"
+            )
         out.append("\r\n")
 
     # Footer: detail of the highlighted row + preview.
@@ -618,7 +837,17 @@ def render(metas, cursor, top, query, sort_mode, rows, cols):
     sys.stdout.flush()
 
 
-def interactive_select(metas, initial_query="", sort_mode="recent"):
+def confirm_prompt(message, cols):
+    """Show an inline y/N confirmation in the footer area and block for a
+    single keypress. Returns True only for an explicit y/Y; everything
+    else (including Esc, Ctrl-C, or a dropped keypress) cancels."""
+    _write("\r" + CSI + "2K" + BOLD + clip(message, cols) + RESET)
+    sys.stdout.flush()
+    key = read_key()
+    return key in ("y", "Y")
+
+
+def interactive_select(metas, initial_query="", sort_mode="recent", trash_mode=False):
     """Return the chosen meta dict, or None if cancelled."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError("interactive picker needs a TTY (use --list / --json)")
@@ -676,6 +905,25 @@ def interactive_select(metas, initial_query="", sort_mode="recent"):
                     view = apply_filter(sort_metas(all_metas, SORT_MODES[sort_idx]), query)
                     cursor = view.index(keep) if keep in view else 0
                     top = 0
+                elif key == K_DEL:
+                    if view:
+                        target = view[cursor]
+                        verb = "Permanently delete" if trash_mode else "Delete"
+                        if confirm_prompt(f'{verb} "{target["title"]}"? y/N', cols):
+                            try:
+                                if trash_mode:
+                                    os.remove(target["path"])
+                                else:
+                                    move_to_trash(target["path"])
+                            except OSError as e:
+                                sys.stderr.write(f"warning: could not delete session: {e}\n")
+                            else:
+                                all_metas.remove(target)
+                                view = apply_filter(
+                                    sort_metas(all_metas, SORT_MODES[sort_idx]), query
+                                )
+                                if cursor >= len(view):
+                                    cursor = max(0, len(view) - 1)
                 elif key == K_BS:
                     if query:
                         query = query[:-1]
@@ -729,6 +977,16 @@ def resume(meta, no_launch=False):
         return 1
 
 
+def restore(meta):
+    try:
+        dst = restore_from_trash(meta["path"])
+    except OSError as e:
+        sys.stderr.write(f"error: could not restore session: {e}\n")
+        return 1
+    sys.stderr.write(f"restored {meta['sessionId']}\n  to {dst}\n")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -745,6 +1003,8 @@ def build_parser():
     p.add_argument("-n", "--limit", type=int, default=0, help="show at most N sessions (0 = all)")
     p.add_argument("--refresh", action="store_true", help="ignore the metadata cache and rescan")
     p.add_argument("--no-launch", action="store_true", help="print the cd + resume command instead of launching")
+    p.add_argument("--trash", action="store_true", help="browse trash instead of live sessions (Enter restores, Delete permanently removes)")
+    p.add_argument("--purge-after", type=int, default=30, metavar="N", help="trash retention in days before auto-purge (default: 30)")
     return p
 
 
@@ -752,10 +1012,20 @@ def main(argv=None):
     reconfigure_streams()
     args = build_parser().parse_args(argv)
 
-    metas = scan(refresh=args.refresh)
-    if not metas:
-        sys.stderr.write(f"no sessions found under {PROJECTS_DIR}\n")
-        return 1
+    purged = purge_expired_trash(args.purge_after)
+    if purged:
+        sys.stderr.write(f"purged {purged} expired trash session(s)\n")
+
+    if args.trash:
+        metas = scan_trash()
+        if not metas:
+            sys.stderr.write(f"no trashed sessions found under {TRASH_DIR}\n")
+            return 1
+    else:
+        metas = scan(refresh=args.refresh)
+        if not metas:
+            sys.stderr.write(f"no sessions found under {PROJECTS_DIR}\n")
+            return 1
 
     if args.project:
         needle = args.project.lower()
@@ -783,13 +1053,17 @@ def main(argv=None):
         return 1
 
     try:
-        chosen = interactive_select(metas, initial_query=query, sort_mode=args.sort)
+        chosen = interactive_select(
+            metas, initial_query=query, sort_mode=args.sort, trash_mode=args.trash
+        )
     except RuntimeError as e:
         sys.stderr.write(str(e) + "\n")
         return 2
     if chosen is None:
         sys.stderr.write("cancelled\n")
         return 130
+    if args.trash:
+        return restore(chosen)
     return resume(chosen, no_launch=args.no_launch)
 
 
