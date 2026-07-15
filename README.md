@@ -42,7 +42,7 @@ python ccpick.py --refresh       # ignore the cache and rescan
 
 | Key | Action |
 | --- | --- |
-| type | filter (fuzzy, token-AND substring) |
+| type | filter (fuzzy subsequence, token-AND) |
 | Up / Down | move cursor |
 | PgUp / PgDn | page |
 | Home / End | jump to top / bottom |
