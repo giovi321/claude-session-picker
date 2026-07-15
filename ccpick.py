@@ -465,15 +465,18 @@ def display_width(s):
     return sum(char_width(c) for c in s)
 
 
-def clip(s, n):
-    """Truncate to a terminal display width of ``n`` cells (accounting for
-    wide/zero-width characters), appending an ellipsis when truncated."""
+def clip_prefix(s, n):
+    """Like clip(), but returns (chars, truncated): the list of original
+    characters that fit within a display width of n cells (reserving room
+    for an ellipsis when truncation is needed) and whether truncation
+    occurred, instead of a single joined+ellipsized string. Lets callers
+    color individual surviving characters before re-joining."""
     if s is None:
         s = ""
     if display_width(s) <= n:
-        return s
+        return list(s), False
     if n <= 1:
-        return s[:1]
+        return list(s[:1]), False
     out = []
     w = 0
     for ch in s:
@@ -482,13 +485,53 @@ def clip(s, n):
             break
         out.append(ch)
         w += cw
-    return "".join(out) + "…"
+    return out, True
+
+
+def clip(s, n):
+    """Truncate to a terminal display width of ``n`` cells (accounting for
+    wide/zero-width characters), appending an ellipsis when truncated."""
+    chars, truncated = clip_prefix(s, n)
+    return "".join(chars) + ("…" if truncated else "")
 
 
 def pad(s, n):
     """Left-justify ``s`` to a display width of ``n`` cells."""
     s = clip(s, n)
     return s + " " * (n - display_width(s))
+
+
+def colorize_title(title, rest_width, highlight_idxs):
+    """Build the title fragment for a picker row within rest_width cells,
+    wrapping characters whose original index is in highlight_idxs with
+    BOLD+CYAN. Falls back to plain clip() output when there is nothing to
+    highlight."""
+    if not highlight_idxs:
+        return clip(title, rest_width)
+    chars, truncated = clip_prefix(title, rest_width)
+    parts = []
+    for i, ch in enumerate(chars):
+        if i in highlight_idxs:
+            parts.append(BOLD + CYAN + ch + RESET)
+        else:
+            parts.append(ch)
+    if truncated:
+        parts.append("…")
+    return "".join(parts)
+
+
+def title_highlights(query, title):
+    """Union of matched character indices (in title) across every
+    whitespace-separated query token, for rendering highlights. Returns an
+    empty set when there is no query or no title."""
+    if not query or not title:
+        return set()
+    idxs = set()
+    for tok in query.lower().split():
+        result = fuzzy_score(tok, title)
+        if result:
+            idxs.update(result[1])
+    return idxs
 
 
 # --------------------------------------------------------------------------- #

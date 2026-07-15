@@ -72,5 +72,47 @@ class MatchFilterTests(unittest.TestCase):
         self.assertIsNone(ccpick.match("cspkr n8n", m))
 
 
+class ClipTests(unittest.TestCase):
+    def test_clip_no_truncation(self):
+        self.assertEqual(ccpick.clip("abc", 10), "abc")
+
+    def test_clip_truncates_with_ellipsis(self):
+        self.assertEqual(ccpick.clip("abcdef", 4), "abc…")
+
+    def test_clip_narrow_width_no_ellipsis(self):
+        self.assertEqual(ccpick.clip("abcdef", 1), "a")
+
+
+class HighlightTests(unittest.TestCase):
+    def test_clip_prefix_no_truncation(self):
+        chars, truncated = ccpick.clip_prefix("abc", 10)
+        self.assertEqual(chars, ["a", "b", "c"])
+        self.assertFalse(truncated)
+
+    def test_clip_prefix_truncates(self):
+        chars, truncated = ccpick.clip_prefix("abcdef", 4)
+        self.assertEqual("".join(chars), "abc")
+        self.assertTrue(truncated)
+
+    def test_colorize_title_no_highlights(self):
+        self.assertEqual(ccpick.colorize_title("abc", 10, set()), "abc")
+
+    def test_colorize_title_highlights_chars(self):
+        result = ccpick.colorize_title("abc", 10, {0, 2})
+        expected = (
+            ccpick.BOLD + ccpick.CYAN + "a" + ccpick.RESET
+            + "b"
+            + ccpick.BOLD + ccpick.CYAN + "c" + ccpick.RESET
+        )
+        self.assertEqual(result, expected)
+
+    def test_title_highlights_returns_matched_indices(self):
+        idxs = ccpick.title_highlights("cspkr", "claude-session-picker")
+        self.assertEqual(idxs, {0, 7, 15, 18, 20})
+
+    def test_title_highlights_empty_query(self):
+        self.assertEqual(ccpick.title_highlights("", "anything"), set())
+
+
 if __name__ == "__main__":
     unittest.main()
