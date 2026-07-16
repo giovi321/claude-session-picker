@@ -30,6 +30,8 @@ PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
 TRASH_DIR = os.path.join(HOME, ".claude", "ccpick-trash")
 CACHE_PATH = os.path.join(HOME, ".claude", "ccpick-cache.json")
 CACHE_VERSION = 3
+MARKS_PATH = os.path.join(HOME, ".claude", "ccpick-marks.json")
+MARKS_VERSION = 1
 
 # How much of each transcript to read from each end. Titles/first-prompt/cwd
 # live near the start; the latest ai-title and last timestamp live near the end.
@@ -341,6 +343,37 @@ class Marks:
             self.saved.remove(sid)
             changed = True
         return changed
+
+
+def load_marks():
+    """Read durable pin/save state. Missing, unreadable, malformed, or
+    wrong-version content all yield an empty Marks (same defensive posture as
+    load_cache -- a lost marks file must never crash the picker)."""
+    try:
+        with open(MARKS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("v") == MARKS_VERSION:
+            pins = data.get("pins")
+            saved = data.get("saved")
+            return Marks(
+                pins if isinstance(pins, list) else [],
+                saved if isinstance(saved, list) else [],
+            )
+    except (OSError, ValueError):
+        pass
+    return Marks()
+
+
+def save_marks(marks):
+    try:
+        tmp = MARKS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(
+                {"v": MARKS_VERSION, "pins": marks.pins, "saved": marks.saved}, fh
+            )
+        os.replace(tmp, MARKS_PATH)
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- #

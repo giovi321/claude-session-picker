@@ -1,4 +1,5 @@
 """Unit tests for ccpick's pure, TTY-independent functions."""
+import json
 import os
 import sys
 import tempfile
@@ -289,6 +290,39 @@ class MarksTests(unittest.TestCase):
         self.assertFalse(m.drop("c"))
         self.assertEqual(m.pins, [])
         self.assertEqual(m.saved, [])
+
+
+class MarksPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.orig = ccpick.MARKS_PATH
+        ccpick.MARKS_PATH = os.path.join(self.tmp.name, "ccpick-marks.json")
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        ccpick.MARKS_PATH = self.orig
+
+    def test_missing_file_returns_empty(self):
+        m = ccpick.load_marks()
+        self.assertEqual(m.pins, [])
+        self.assertEqual(m.saved, [])
+
+    def test_round_trip(self):
+        ccpick.save_marks(ccpick.Marks(pins=["a", "b"], saved=["c"]))
+        m = ccpick.load_marks()
+        self.assertEqual(m.pins, ["a", "b"])
+        self.assertEqual(m.saved, ["c"])
+
+    def test_malformed_file_returns_empty(self):
+        with open(ccpick.MARKS_PATH, "w", encoding="utf-8") as fh:
+            fh.write("not json{{{")
+        self.assertEqual(ccpick.load_marks().pins, [])
+
+    def test_wrong_version_returns_empty(self):
+        with open(ccpick.MARKS_PATH, "w", encoding="utf-8") as fh:
+            json.dump({"v": 999, "pins": ["a"], "saved": []}, fh)
+        self.assertEqual(ccpick.load_marks().pins, [])
 
 
 if __name__ == "__main__":
