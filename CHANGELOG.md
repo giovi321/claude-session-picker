@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Pin sessions to a capped top group (`--max-pins N`, default 3) and save others to an unlimited "save for later" group, toggled in the picker with `.` then `p` / `b`. State persists in `~/.claude/ccpick-marks.json`. Groups show when the filter is empty and collapse into the ranked list while filtering. `--list` prefixes a marker glyph and `--json` gains `pinned` / `saved` booleans
+
 ## v0.1.1
 
 - Fix `project_label()` unconditionally rendering with a backslash separator, which showed paths like `giovanni\project` on macOS/Linux instead of `giovanni/project`. The project column now always displays with the current platform's native separator regardless of how the path was recorded.

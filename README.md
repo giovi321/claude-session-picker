@@ -53,6 +53,7 @@ session interactively, then resumes it in its original directory.
 - Head+tail parsing never loads multi-MB transcripts fully; results cached by mtime+size so repeat launches are instant
 - Zero third-party dependencies (Python 3 standard library), works on Windows and POSIX
 - Delete a session to a recoverable trash folder (`Delete` key); browse/restore trash with `--trash`; auto-purges after a configurable retention period
+- Pin sessions (default max 3, `--max-pins N`) to float them to a top group, and save others to an unlimited "save for later" group; both persist in `~/.claude/ccpick-marks.json`. Toggle with `.` then `p` / `b`. Typing a filter flattens the groups into the ranked results
 
 ## Requirements
 
@@ -84,6 +85,8 @@ python ccpick.py --refresh       # ignore the cache and rescan
 | Backspace | edit filter |
 | Enter | resume selected session |
 | Delete | delete the highlighted session (moves to trash; permanently removes in `--trash` mode) |
+| `.` then `p` | pin / unpin the highlighted session (top group, capped) |
+| `.` then `b` | save / unsave the highlighted session ("save for later" group) |
 | Esc / Ctrl-C | cancel |
 
 ## Install as a `ccpick` quick command
@@ -139,6 +142,7 @@ ln -s /path/to/claude-session-picker/ccpick.sh ~/.local/bin/ccpick
 | `--no-launch` | print the `cd` + resume command instead of launching |
 | `--trash` | browse trash instead of live sessions (`Enter` restores, `Delete` permanently removes) |
 | `--purge-after N` | trash retention in days before auto-purge (default: 30) |
+| `--max-pins N` | maximum pinned sessions (default: 3) |
 
 ## Notes
 
@@ -149,3 +153,4 @@ ln -s /path/to/claude-session-picker/ccpick.sh ~/.local/bin/ccpick
   scratch each run (stale entries for deleted sessions are dropped), reusing
   entries whose file mtime and size are unchanged.
 - Deleted sessions move to `~/.claude/ccpick-trash/` (mirroring the live layout) rather than being removed immediately; browse and restore them with `ccpick --trash`. Expired trash (older than `--purge-after` days, default 30) is purged automatically at the start of every run.
+- Pins and saved sessions are stored by session id in `~/.claude/ccpick-marks.json`, separate from the disposable metadata cache. Pinned and saved groups show only when the filter is empty; any query collapses them into one ranked list. Trashing a session also clears its pin/save.
