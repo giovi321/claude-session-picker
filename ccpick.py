@@ -700,6 +700,66 @@ def title_highlights(query, title):
     return idxs
 
 
+def row_marker(marks, sid):
+    """Two-cell leading marker for a session row: pinned, saved, or blank.
+    Uses pad() so the column is exactly 2 display cells regardless of whether
+    the terminal renders the glyph as 1 or 2 wide."""
+    if marks.is_pinned(sid):
+        ch = PIN_GLYPH
+    elif marks.is_saved(sid):
+        ch = SAVE_GLYPH
+    else:
+        ch = ""
+    return pad(ch, 2)
+
+
+def partition_marked(sorted_metas, marks):
+    """Split an already-sorted meta list into (pinned, saved, others). Pinned
+    follow marks.pins order; saved and others keep the incoming (sort-mode)
+    order. Each session lands in exactly one bucket; pin ids with no matching
+    session (dangling) are skipped."""
+    by_id = {m["sessionId"]: m for m in sorted_metas}
+    pinned_ids = set(marks.pins)
+    pinned = [by_id[sid] for sid in marks.pins if sid in by_id]
+    saved = [
+        m for m in sorted_metas
+        if m["sessionId"] not in pinned_ids and marks.is_saved(m["sessionId"])
+    ]
+    others = [
+        m for m in sorted_metas
+        if m["sessionId"] not in pinned_ids and not marks.is_saved(m["sessionId"])
+    ]
+    return pinned, saved, others
+
+
+def build_rows(pinned, saved, others, grouped):
+    """Build the picker's display-row list. Header rows are
+    {'kind': 'header', 'label': ...} (non-selectable); session rows are
+    {'kind': 'session', 'meta': m}. When not grouped, returns a flat list of
+    session rows for `others` (pinned/saved are ignored). Empty groups omit
+    both their header and their rows."""
+    if not grouped:
+        return [{"kind": "session", "meta": m} for m in others]
+    rows = []
+    for label, group in (
+        ("PINNED", pinned),
+        ("SAVED FOR LATER", saved),
+        ("── sessions ──", others),
+    ):
+        if not group:
+            continue
+        rows.append({"kind": "header", "label": label})
+        rows.extend({"kind": "session", "meta": m} for m in group)
+    return rows
+
+
+def session_row_indices(rows):
+    """Indices of the selectable (session) rows, in order. The cursor indexes
+    the session list; this maps a session position to its display-row index
+    so scroll math can keep headers on-screen."""
+    return [i for i, r in enumerate(rows) if r["kind"] == "session"]
+
+
 # --------------------------------------------------------------------------- #
 # Non-interactive output
 # --------------------------------------------------------------------------- #
@@ -722,6 +782,8 @@ DIM = CSI + "2m"
 BOLD = CSI + "1m"
 INV = CSI + "7m"
 CYAN = CSI + "36m"
+PIN_GLYPH = "★"
+SAVE_GLYPH = "◆"
 
 
 def enable_vt_windows():

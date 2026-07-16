@@ -325,5 +325,66 @@ class MarksPersistenceTests(unittest.TestCase):
         self.assertEqual(ccpick.load_marks().pins, [])
 
 
+class GroupingTests(unittest.TestCase):
+    def _meta(self, sid, title="t"):
+        return {"sessionId": sid, "title": title, "cwd": "", "gitBranch": "",
+                "firstPrompt": "", "summary": None, "lastTs": ""}
+
+    def test_row_marker_glyphs(self):
+        marks = ccpick.Marks(pins=["a"], saved=["b"])
+        self.assertEqual(ccpick.display_width(ccpick.row_marker(marks, "a")), 2)
+        self.assertEqual(ccpick.display_width(ccpick.row_marker(marks, "b")), 2)
+        self.assertEqual(ccpick.row_marker(marks, "c"), "  ")
+        self.assertTrue(ccpick.row_marker(marks, "a").startswith(ccpick.PIN_GLYPH))
+        self.assertTrue(ccpick.row_marker(marks, "b").startswith(ccpick.SAVE_GLYPH))
+
+    def test_partition_orders_and_excludes(self):
+        metas = [self._meta("a"), self._meta("b"), self._meta("c"), self._meta("d")]
+        marks = ccpick.Marks(pins=["c", "a"], saved=["d"])
+        pinned, saved, others = ccpick.partition_marked(metas, marks)
+        self.assertEqual([m["sessionId"] for m in pinned], ["c", "a"])  # pin order
+        self.assertEqual([m["sessionId"] for m in saved], ["d"])
+        self.assertEqual([m["sessionId"] for m in others], ["b"])
+
+    def test_partition_skips_dangling_pin(self):
+        metas = [self._meta("a")]
+        marks = ccpick.Marks(pins=["a", "ghost"])
+        pinned, saved, others = ccpick.partition_marked(metas, marks)
+        self.assertEqual([m["sessionId"] for m in pinned], ["a"])
+        self.assertEqual(others, [])
+
+    def test_build_rows_flat(self):
+        metas = [self._meta("a"), self._meta("b")]
+        rows = ccpick.build_rows([], [], metas, grouped=False)
+        self.assertTrue(all(r["kind"] == "session" for r in rows))
+        self.assertEqual(len(rows), 2)
+
+    def test_build_rows_grouped_has_headers(self):
+        rows = ccpick.build_rows(
+            [self._meta("a")], [self._meta("b")], [self._meta("c")], grouped=True
+        )
+        kinds = [(r["kind"], r.get("label")) for r in rows]
+        self.assertEqual(kinds[0], ("header", "PINNED"))
+        self.assertEqual(rows[1]["meta"]["sessionId"], "a")
+        self.assertEqual(kinds[2], ("header", "SAVED FOR LATER"))
+        self.assertEqual(kinds[4][0], "header")  # "── sessions ──"
+
+    def test_build_rows_omits_empty_group(self):
+        rows = ccpick.build_rows(
+            [self._meta("a")], [], [self._meta("c")], grouped=True
+        )
+        labels = [r["label"] for r in rows if r["kind"] == "header"]
+        self.assertNotIn("SAVED FOR LATER", labels)
+        self.assertIn("PINNED", labels)
+
+    def test_session_row_indices_skips_headers(self):
+        rows = ccpick.build_rows(
+            [self._meta("a")], [self._meta("b")], [], grouped=True
+        )
+        sel = ccpick.session_row_indices(rows)
+        self.assertEqual([rows[i]["meta"]["sessionId"] for i in sel], ["a", "b"])
+        self.assertTrue(all(rows[i]["kind"] == "session" for i in sel))
+
+
 if __name__ == "__main__":
     unittest.main()
