@@ -763,9 +763,11 @@ def session_row_indices(rows):
 # --------------------------------------------------------------------------- #
 # Non-interactive output
 # --------------------------------------------------------------------------- #
-def print_list(metas):
+def print_list(metas, marks=None, show_markers=False):
     for m in metas:
+        prefix = row_marker(marks, m["sessionId"]) if show_markers else ""
         print(
+            f"{prefix}"
             f"{rel_time(m['lastTs']):>4}  "
             f"{pad(project_label(m['cwd']), 28)}  "
             f"{pad(m['title'], 60)}  "
@@ -1260,10 +1262,16 @@ def main(argv=None):
             metas = apply_filter(metas, query)
         if args.limit and args.limit > 0:
             metas = metas[: args.limit]
+        show_markers = bool(marks.pins or marks.saved)
         if args.json:
-            print(json.dumps(metas, indent=2))
+            out = [
+                dict(m, pinned=marks.is_pinned(m["sessionId"]),
+                     saved=marks.is_saved(m["sessionId"]))
+                for m in metas
+            ]
+            print(json.dumps(out, indent=2))
         else:
-            print_list(metas)
+            print_list(metas, marks=marks, show_markers=show_markers)
         return 0
 
     # Interactive: filtering happens live inside the picker, so pass the full

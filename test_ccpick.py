@@ -386,5 +386,29 @@ class GroupingTests(unittest.TestCase):
         self.assertTrue(all(rows[i]["kind"] == "session" for i in sel))
 
 
+import io
+import contextlib
+
+
+class ListMarkerTests(unittest.TestCase):
+    def _meta(self, sid, title="t"):
+        return {"sessionId": sid, "title": title, "cwd": "/x/y",
+                "gitBranch": "", "firstPrompt": "", "summary": None, "lastTs": ""}
+
+    def test_print_list_no_markers_by_default(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ccpick.print_list([self._meta("a")])
+        self.assertFalse(buf.getvalue().startswith("★"))
+        self.assertFalse(buf.getvalue().startswith("◆"))
+
+    def test_print_list_shows_pin_glyph(self):
+        marks = ccpick.Marks(pins=["a"])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ccpick.print_list([self._meta("a")], marks=marks, show_markers=True)
+        self.assertTrue(buf.getvalue().startswith(ccpick.PIN_GLYPH))
+
+
 if __name__ == "__main__":
     unittest.main()
