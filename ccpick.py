@@ -293,6 +293,57 @@ def sort_metas(metas, mode):
 
 
 # --------------------------------------------------------------------------- #
+# Marks (pin / save-for-later)
+# --------------------------------------------------------------------------- #
+class Marks:
+    """Durable pin / save-for-later state, keyed by sessionId. Pin and save
+    are mutually exclusive per session; pins are order-preserving (that order
+    is the pinned-group display order) and capped by a caller-supplied max."""
+
+    def __init__(self, pins=None, saved=None):
+        self.pins = list(pins) if pins else []
+        self.saved = list(saved) if saved else []
+
+    def is_pinned(self, sid):
+        return sid in self.pins
+
+    def is_saved(self, sid):
+        return sid in self.saved
+
+    def toggle_pin(self, sid, max_pins):
+        if sid in self.pins:
+            self.pins.remove(sid)
+            return "unpinned"
+        if len(self.pins) >= max_pins:
+            return "cap"
+        if sid in self.saved:
+            self.saved.remove(sid)  # promote a saved item to pinned
+        self.pins.append(sid)
+        return "pinned"
+
+    def toggle_save(self, sid):
+        if sid in self.saved:
+            self.saved.remove(sid)
+            return "unsaved"
+        if sid in self.pins:
+            self.pins.remove(sid)  # move a pinned item to saved
+        self.saved.append(sid)
+        return "saved"
+
+    def drop(self, sid):
+        """Remove sid from both lists (used when a session is trashed).
+        Returns True if anything was removed."""
+        changed = False
+        if sid in self.pins:
+            self.pins.remove(sid)
+            changed = True
+        if sid in self.saved:
+            self.saved.remove(sid)
+            changed = True
+        return changed
+
+
+# --------------------------------------------------------------------------- #
 # Trash (soft delete / restore / purge)
 # --------------------------------------------------------------------------- #
 def _mirror_path(path, src_root, dst_root):

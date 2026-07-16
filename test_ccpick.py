@@ -237,5 +237,59 @@ class ProjectLabelTests(unittest.TestCase):
         self.assertEqual(ccpick.project_label(None), "?")
 
 
+class MarksTests(unittest.TestCase):
+    def test_pin_and_unpin(self):
+        m = ccpick.Marks()
+        self.assertEqual(m.toggle_pin("a", 3), "pinned")
+        self.assertTrue(m.is_pinned("a"))
+        self.assertEqual(m.toggle_pin("a", 3), "unpinned")
+        self.assertFalse(m.is_pinned("a"))
+
+    def test_pin_cap_refuses(self):
+        m = ccpick.Marks(pins=["a", "b", "c"])
+        self.assertEqual(m.toggle_pin("d", 3), "cap")
+        self.assertFalse(m.is_pinned("d"))
+        self.assertEqual(m.pins, ["a", "b", "c"])
+
+    def test_pin_custom_cap(self):
+        m = ccpick.Marks(pins=["a"])
+        self.assertEqual(m.toggle_pin("b", 1), "cap")
+        m2 = ccpick.Marks(pins=["a"])
+        self.assertEqual(m2.toggle_pin("b", 5), "pinned")
+
+    def test_pin_preserves_order(self):
+        m = ccpick.Marks()
+        m.toggle_pin("a", 3)
+        m.toggle_pin("b", 3)
+        self.assertEqual(m.pins, ["a", "b"])
+
+    def test_pinning_saved_item_promotes_it(self):
+        m = ccpick.Marks(saved=["a"])
+        self.assertEqual(m.toggle_pin("a", 3), "pinned")
+        self.assertTrue(m.is_pinned("a"))
+        self.assertFalse(m.is_saved("a"))
+
+    def test_save_and_unsave(self):
+        m = ccpick.Marks()
+        self.assertEqual(m.toggle_save("a"), "saved")
+        self.assertTrue(m.is_saved("a"))
+        self.assertEqual(m.toggle_save("a"), "unsaved")
+        self.assertFalse(m.is_saved("a"))
+
+    def test_saving_pinned_item_moves_it(self):
+        m = ccpick.Marks(pins=["a"])
+        self.assertEqual(m.toggle_save("a"), "saved")
+        self.assertTrue(m.is_saved("a"))
+        self.assertFalse(m.is_pinned("a"))
+
+    def test_drop_removes_from_both(self):
+        m = ccpick.Marks(pins=["a"], saved=["b"])
+        self.assertTrue(m.drop("a"))
+        self.assertTrue(m.drop("b"))
+        self.assertFalse(m.drop("c"))
+        self.assertEqual(m.pins, [])
+        self.assertEqual(m.saved, [])
+
+
 if __name__ == "__main__":
     unittest.main()
