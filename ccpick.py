@@ -1052,14 +1052,15 @@ def interactive_select(metas, initial_query="", sort_mode="recent",
     cursor = 0
     top = 0
 
-    def rebuild(keep=None):
+    def rebuild(keep=None, reset_scroll=True):
         nonlocal display_rows, sel, view, show_markers, cursor, top
         display_rows, sel, view, show_markers = build_view()
         if keep is not None and keep in view:
             cursor = view.index(keep)
-        else:
+        elif reset_scroll:
             cursor = 0
-        top = 0
+        if reset_scroll:
+            top = 0
 
     _write(CSI + "?1049h")  # alternate screen buffer
     _write(CSI + "?25l")  # hide cursor
@@ -1113,8 +1114,12 @@ def interactive_select(metas, initial_query="", sort_mode="recent",
                     if view:
                         return view[cursor]
                     continue
-                if key == "." and not trash_mode:
-                    action_mode = True
+                if key == ".":
+                    # Leader for the pin/save action mode. Consume it in both
+                    # modes so it never leaks into the filter; in --trash mode
+                    # marks are meaningless, so it is simply a no-op there.
+                    if not trash_mode:
+                        action_mode = True
                     continue
                 if key == K_UP:
                     cursor -= 1
@@ -1147,7 +1152,13 @@ def interactive_select(metas, initial_query="", sort_mode="recent",
                                 all_metas.remove(target_meta)
                                 if not trash_mode and marks.drop(target_meta["sessionId"]):
                                     save_marks(marks)
-                                rebuild()
+                                # Keep the highlight where it was (the row below
+                                # the deleted one slides up under the cursor),
+                                # matching the pre-feature picker: don't reset
+                                # cursor/scroll to the top.
+                                rebuild(reset_scroll=False)
+                                if cursor >= len(view):
+                                    cursor = max(0, len(view) - 1)
                 elif key == K_BS:
                     if query:
                         query = query[:-1]
