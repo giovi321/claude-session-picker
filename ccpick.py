@@ -931,13 +931,18 @@ def _write(s):
 
 
 def render(display_rows, sel, cursor, top, query, sort_mode, height, cols,
-           marks, show_markers, action_mode, notice):
+           marks, show_markers, action_mode, notice, trash_mode=False):
     out = [CSI + "H"]  # cursor home
     total = len(sel)  # selectable sessions, not display rows
+    hint = "" if trash_mode else "  .=pin/save"
     suffix = (
-        f"  {total} match{'' if total == 1 else 'es'}  {DIM}[sort:{sort_mode}]{RESET}"
+        f"  {total} match{'' if total == 1 else 'es'}  "
+        f"{DIM}[sort:{sort_mode}]{hint}{RESET}"
     )
-    fixed = len("ccpick  ") + 1 + len(f"  {total} matches  [sort:{sort_mode}]")
+    fixed = (
+        len("ccpick  ") + 1
+        + len(f"  {total} matches  [sort:{sort_mode}]") + len(hint)
+    )
     q = clip(query, max(0, cols - fixed))
     header = f"{BOLD}ccpick{RESET}  {CYAN}{q}{RESET}{DIM}▏{RESET}{suffix}"
     out.append(CSI + "2K" + header + "\r\n")
@@ -1083,7 +1088,7 @@ def interactive_select(metas, initial_query="", sort_mode="recent",
 
                 render(display_rows, sel, cursor, top, query,
                        SORT_MODES[sort_idx], height, cols, marks,
-                       show_markers, action_mode, notice)
+                       show_markers, action_mode, notice, trash_mode)
                 notice = None  # cleared after one rendered frame
 
                 key = read_key()
