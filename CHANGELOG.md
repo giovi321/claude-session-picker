@@ -1,9 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## v0.2.0
 
-### Added
-- Pin sessions to a capped top group (`--max-pins N`, default 3) and save others to an unlimited "save for later" group, toggled in the picker with `.` then `p` / `b`. State persists in `~/.claude/ccpick-marks.json`. Groups show when the filter is empty and collapse into the ranked list while filtering. `--list` prefixes a marker glyph and `--json` gains `pinned` / `saved` booleans
+- Pin sessions to a capped top group (`--max-pins N`, default 3) and save others to an unlimited "save for later" group, toggled in the picker with `.` then `p` / `b` (a `.=pin/save` hint shows in the header); state persists in `~/.claude/ccpick-marks.json`, separate from the disposable metadata cache
+- Pinned and saved sessions render as their own groups when the filter is empty and collapse into the ranked list while filtering; `--list` prefixes a marker glyph and `--json` gains `pinned` / `saved` booleans
 
 ## v0.1.1
 
