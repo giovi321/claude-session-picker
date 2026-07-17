@@ -1,4 +1,5 @@
 """Unit tests for ccpick's pure, TTY-independent functions."""
+import json
 import os
 import sys
 import tempfile
@@ -235,6 +236,178 @@ class ProjectLabelTests(unittest.TestCase):
     def test_empty_cwd_returns_question_mark(self):
         self.assertEqual(ccpick.project_label(""), "?")
         self.assertEqual(ccpick.project_label(None), "?")
+
+
+class MarksTests(unittest.TestCase):
+    def test_pin_and_unpin(self):
+        m = ccpick.Marks()
+        self.assertEqual(m.toggle_pin("a", 3), "pinned")
+        self.assertTrue(m.is_pinned("a"))
+        self.assertEqual(m.toggle_pin("a", 3), "unpinned")
+        self.assertFalse(m.is_pinned("a"))
+
+    def test_pin_cap_refuses(self):
+        m = ccpick.Marks(pins=["a", "b", "c"])
+        self.assertEqual(m.toggle_pin("d", 3), "cap")
+        self.assertFalse(m.is_pinned("d"))
+        self.assertEqual(m.pins, ["a", "b", "c"])
+
+    def test_pin_custom_cap(self):
+        m = ccpick.Marks(pins=["a"])
+        self.assertEqual(m.toggle_pin("b", 1), "cap")
+        m2 = ccpick.Marks(pins=["a"])
+        self.assertEqual(m2.toggle_pin("b", 5), "pinned")
+
+    def test_pin_preserves_order(self):
+        m = ccpick.Marks()
+        m.toggle_pin("a", 3)
+        m.toggle_pin("b", 3)
+        self.assertEqual(m.pins, ["a", "b"])
+
+    def test_pinning_saved_item_promotes_it(self):
+        m = ccpick.Marks(saved=["a"])
+        self.assertEqual(m.toggle_pin("a", 3), "pinned")
+        self.assertTrue(m.is_pinned("a"))
+        self.assertFalse(m.is_saved("a"))
+
+    def test_save_and_unsave(self):
+        m = ccpick.Marks()
+        self.assertEqual(m.toggle_save("a"), "saved")
+        self.assertTrue(m.is_saved("a"))
+        self.assertEqual(m.toggle_save("a"), "unsaved")
+        self.assertFalse(m.is_saved("a"))
+
+    def test_saving_pinned_item_moves_it(self):
+        m = ccpick.Marks(pins=["a"])
+        self.assertEqual(m.toggle_save("a"), "saved")
+        self.assertTrue(m.is_saved("a"))
+        self.assertFalse(m.is_pinned("a"))
+
+    def test_drop_removes_from_both(self):
+        m = ccpick.Marks(pins=["a"], saved=["b"])
+        self.assertTrue(m.drop("a"))
+        self.assertTrue(m.drop("b"))
+        self.assertFalse(m.drop("c"))
+        self.assertEqual(m.pins, [])
+        self.assertEqual(m.saved, [])
+
+
+class MarksPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.orig = ccpick.MARKS_PATH
+        ccpick.MARKS_PATH = os.path.join(self.tmp.name, "ccpick-marks.json")
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        ccpick.MARKS_PATH = self.orig
+
+    def test_missing_file_returns_empty(self):
+        m = ccpick.load_marks()
+        self.assertEqual(m.pins, [])
+        self.assertEqual(m.saved, [])
+
+    def test_round_trip(self):
+        ccpick.save_marks(ccpick.Marks(pins=["a", "b"], saved=["c"]))
+        m = ccpick.load_marks()
+        self.assertEqual(m.pins, ["a", "b"])
+        self.assertEqual(m.saved, ["c"])
+
+    def test_malformed_file_returns_empty(self):
+        with open(ccpick.MARKS_PATH, "w", encoding="utf-8") as fh:
+            fh.write("not json{{{")
+        self.assertEqual(ccpick.load_marks().pins, [])
+
+    def test_wrong_version_returns_empty(self):
+        with open(ccpick.MARKS_PATH, "w", encoding="utf-8") as fh:
+            json.dump({"v": 999, "pins": ["a"], "saved": []}, fh)
+        self.assertEqual(ccpick.load_marks().pins, [])
+
+
+class GroupingTests(unittest.TestCase):
+    def _meta(self, sid, title="t"):
+        return {"sessionId": sid, "title": title, "cwd": "", "gitBranch": "",
+                "firstPrompt": "", "summary": None, "lastTs": ""}
+
+    def test_row_marker_glyphs(self):
+        marks = ccpick.Marks(pins=["a"], saved=["b"])
+        self.assertEqual(ccpick.display_width(ccpick.row_marker(marks, "a")), 2)
+        self.assertEqual(ccpick.display_width(ccpick.row_marker(marks, "b")), 2)
+        self.assertEqual(ccpick.row_marker(marks, "c"), "  ")
+        self.assertTrue(ccpick.row_marker(marks, "a").startswith(ccpick.PIN_GLYPH))
+        self.assertTrue(ccpick.row_marker(marks, "b").startswith(ccpick.SAVE_GLYPH))
+
+    def test_partition_orders_and_excludes(self):
+        metas = [self._meta("a"), self._meta("b"), self._meta("c"), self._meta("d")]
+        marks = ccpick.Marks(pins=["c", "a"], saved=["d"])
+        pinned, saved, others = ccpick.partition_marked(metas, marks)
+        self.assertEqual([m["sessionId"] for m in pinned], ["c", "a"])  # pin order
+        self.assertEqual([m["sessionId"] for m in saved], ["d"])
+        self.assertEqual([m["sessionId"] for m in others], ["b"])
+
+    def test_partition_skips_dangling_pin(self):
+        metas = [self._meta("a")]
+        marks = ccpick.Marks(pins=["a", "ghost"])
+        pinned, saved, others = ccpick.partition_marked(metas, marks)
+        self.assertEqual([m["sessionId"] for m in pinned], ["a"])
+        self.assertEqual(others, [])
+
+    def test_build_rows_flat(self):
+        metas = [self._meta("a"), self._meta("b")]
+        rows = ccpick.build_rows([], [], metas, grouped=False)
+        self.assertTrue(all(r["kind"] == "session" for r in rows))
+        self.assertEqual(len(rows), 2)
+
+    def test_build_rows_grouped_has_headers(self):
+        rows = ccpick.build_rows(
+            [self._meta("a")], [self._meta("b")], [self._meta("c")], grouped=True
+        )
+        kinds = [(r["kind"], r.get("label")) for r in rows]
+        self.assertEqual(kinds[0], ("header", "PINNED"))
+        self.assertEqual(rows[1]["meta"]["sessionId"], "a")
+        self.assertEqual(kinds[2], ("header", "SAVED FOR LATER"))
+        self.assertEqual(kinds[4][0], "header")  # "── sessions ──"
+
+    def test_build_rows_omits_empty_group(self):
+        rows = ccpick.build_rows(
+            [self._meta("a")], [], [self._meta("c")], grouped=True
+        )
+        labels = [r["label"] for r in rows if r["kind"] == "header"]
+        self.assertNotIn("SAVED FOR LATER", labels)
+        self.assertIn("PINNED", labels)
+
+    def test_session_row_indices_skips_headers(self):
+        rows = ccpick.build_rows(
+            [self._meta("a")], [self._meta("b")], [], grouped=True
+        )
+        sel = ccpick.session_row_indices(rows)
+        self.assertEqual([rows[i]["meta"]["sessionId"] for i in sel], ["a", "b"])
+        self.assertTrue(all(rows[i]["kind"] == "session" for i in sel))
+
+
+import io
+import contextlib
+
+
+class ListMarkerTests(unittest.TestCase):
+    def _meta(self, sid, title="t"):
+        return {"sessionId": sid, "title": title, "cwd": "/x/y",
+                "gitBranch": "", "firstPrompt": "", "summary": None, "lastTs": ""}
+
+    def test_print_list_no_markers_by_default(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ccpick.print_list([self._meta("a")])
+        self.assertFalse(buf.getvalue().startswith("★"))
+        self.assertFalse(buf.getvalue().startswith("◆"))
+
+    def test_print_list_shows_pin_glyph(self):
+        marks = ccpick.Marks(pins=["a"])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ccpick.print_list([self._meta("a")], marks=marks, show_markers=True)
+        self.assertTrue(buf.getvalue().startswith(ccpick.PIN_GLYPH))
 
 
 if __name__ == "__main__":

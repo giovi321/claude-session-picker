@@ -30,6 +30,8 @@ PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
 TRASH_DIR = os.path.join(HOME, ".claude", "ccpick-trash")
 CACHE_PATH = os.path.join(HOME, ".claude", "ccpick-cache.json")
 CACHE_VERSION = 3
+MARKS_PATH = os.path.join(HOME, ".claude", "ccpick-marks.json")
+MARKS_VERSION = 1
 
 # How much of each transcript to read from each end. Titles/first-prompt/cwd
 # live near the start; the latest ai-title and last timestamp live near the end.
@@ -290,6 +292,88 @@ def sort_metas(metas, mode):
     if mode == "title":
         return sorted(metas, key=lambda m: (m["title"] or "").lower())
     return sorted(metas, key=lambda m: m["lastTs"] or "", reverse=True)  # recent
+
+
+# --------------------------------------------------------------------------- #
+# Marks (pin / save-for-later)
+# --------------------------------------------------------------------------- #
+class Marks:
+    """Durable pin / save-for-later state, keyed by sessionId. Pin and save
+    are mutually exclusive per session; pins are order-preserving (that order
+    is the pinned-group display order) and capped by a caller-supplied max."""
+
+    def __init__(self, pins=None, saved=None):
+        self.pins = list(pins) if pins else []
+        self.saved = list(saved) if saved else []
+
+    def is_pinned(self, sid):
+        return sid in self.pins
+
+    def is_saved(self, sid):
+        return sid in self.saved
+
+    def toggle_pin(self, sid, max_pins):
+        if sid in self.pins:
+            self.pins.remove(sid)
+            return "unpinned"
+        if len(self.pins) >= max_pins:
+            return "cap"
+        if sid in self.saved:
+            self.saved.remove(sid)  # promote a saved item to pinned
+        self.pins.append(sid)
+        return "pinned"
+
+    def toggle_save(self, sid):
+        if sid in self.saved:
+            self.saved.remove(sid)
+            return "unsaved"
+        if sid in self.pins:
+            self.pins.remove(sid)  # move a pinned item to saved
+        self.saved.append(sid)
+        return "saved"
+
+    def drop(self, sid):
+        """Remove sid from both lists (used when a session is trashed).
+        Returns True if anything was removed."""
+        changed = False
+        if sid in self.pins:
+            self.pins.remove(sid)
+            changed = True
+        if sid in self.saved:
+            self.saved.remove(sid)
+            changed = True
+        return changed
+
+
+def load_marks():
+    """Read durable pin/save state. Missing, unreadable, malformed, or
+    wrong-version content all yield an empty Marks (same defensive posture as
+    load_cache -- a lost marks file must never crash the picker)."""
+    try:
+        with open(MARKS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and data.get("v") == MARKS_VERSION:
+            pins = data.get("pins")
+            saved = data.get("saved")
+            return Marks(
+                pins if isinstance(pins, list) else [],
+                saved if isinstance(saved, list) else [],
+            )
+    except (OSError, ValueError):
+        pass
+    return Marks()
+
+
+def save_marks(marks):
+    try:
+        tmp = MARKS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(
+                {"v": MARKS_VERSION, "pins": marks.pins, "saved": marks.saved}, fh
+            )
+        os.replace(tmp, MARKS_PATH)
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -616,12 +700,74 @@ def title_highlights(query, title):
     return idxs
 
 
+def row_marker(marks, sid):
+    """Two-cell leading marker for a session row: pinned, saved, or blank.
+    Uses pad() so the column is exactly 2 display cells regardless of whether
+    the terminal renders the glyph as 1 or 2 wide."""
+    if marks.is_pinned(sid):
+        ch = PIN_GLYPH
+    elif marks.is_saved(sid):
+        ch = SAVE_GLYPH
+    else:
+        ch = ""
+    return pad(ch, 2)
+
+
+def partition_marked(sorted_metas, marks):
+    """Split an already-sorted meta list into (pinned, saved, others). Pinned
+    follow marks.pins order; saved and others keep the incoming (sort-mode)
+    order. Each session lands in exactly one bucket; pin ids with no matching
+    session (dangling) are skipped."""
+    by_id = {m["sessionId"]: m for m in sorted_metas}
+    pinned_ids = set(marks.pins)
+    pinned = [by_id[sid] for sid in marks.pins if sid in by_id]
+    saved = [
+        m for m in sorted_metas
+        if m["sessionId"] not in pinned_ids and marks.is_saved(m["sessionId"])
+    ]
+    others = [
+        m for m in sorted_metas
+        if m["sessionId"] not in pinned_ids and not marks.is_saved(m["sessionId"])
+    ]
+    return pinned, saved, others
+
+
+def build_rows(pinned, saved, others, grouped):
+    """Build the picker's display-row list. Header rows are
+    {'kind': 'header', 'label': ...} (non-selectable); session rows are
+    {'kind': 'session', 'meta': m}. When not grouped, returns a flat list of
+    session rows for `others` (pinned/saved are ignored). Empty groups omit
+    both their header and their rows."""
+    if not grouped:
+        return [{"kind": "session", "meta": m} for m in others]
+    rows = []
+    for label, group in (
+        ("PINNED", pinned),
+        ("SAVED FOR LATER", saved),
+        ("── sessions ──", others),
+    ):
+        if not group:
+            continue
+        rows.append({"kind": "header", "label": label})
+        rows.extend({"kind": "session", "meta": m} for m in group)
+    return rows
+
+
+def session_row_indices(rows):
+    """Indices of the selectable (session) rows, in order. The cursor indexes
+    the session list; this maps a session position to its display-row index
+    so scroll math can keep headers on-screen."""
+    return [i for i, r in enumerate(rows) if r["kind"] == "session"]
+
+
 # --------------------------------------------------------------------------- #
 # Non-interactive output
 # --------------------------------------------------------------------------- #
-def print_list(metas):
+def print_list(metas, marks=None, show_markers=False):
     for m in metas:
+        prefix = row_marker(marks, m["sessionId"]) if show_markers else ""
         print(
+            f"{prefix}"
             f"{rel_time(m['lastTs']):>4}  "
             f"{pad(project_label(m['cwd']), 28)}  "
             f"{pad(m['title'], 60)}  "
@@ -638,6 +784,8 @@ DIM = CSI + "2m"
 BOLD = CSI + "1m"
 INV = CSI + "7m"
 CYAN = CSI + "36m"
+PIN_GLYPH = "★"
+SAVE_GLYPH = "◆"
 
 
 def enable_vt_windows():
@@ -782,31 +930,45 @@ def _write(s):
     sys.stdout.write(s)
 
 
-def render(metas, cursor, top, query, sort_mode, rows, cols):
+def render(display_rows, sel, cursor, top, query, sort_mode, height, cols,
+           marks, show_markers, action_mode, notice, trash_mode=False):
     out = [CSI + "H"]  # cursor home
-    total = len(metas)
+    total = len(sel)  # selectable sessions, not display rows
+    hint = "" if trash_mode else "  .=pin/save"
     suffix = (
-        f"  {total} match{'' if total == 1 else 'es'}  {DIM}[sort:{sort_mode}]{RESET}"
+        f"  {total} match{'' if total == 1 else 'es'}  "
+        f"{DIM}[sort:{sort_mode}]{hint}{RESET}"
     )
-    # Keep the header within the terminal width by clipping the (variable) query.
-    fixed = len("ccpick  ") + 1 + len(f"  {total} matches  [sort:{sort_mode}]")
+    fixed = (
+        len("ccpick  ") + 1
+        + len(f"  {total} matches  [sort:{sort_mode}]") + len(hint)
+    )
     q = clip(query, max(0, cols - fixed))
     header = f"{BOLD}ccpick{RESET}  {CYAN}{q}{RESET}{DIM}▏{RESET}{suffix}"
     out.append(CSI + "2K" + header + "\r\n")
 
     time_w = 4
     proj_w = min(30, max(14, cols // 4))
-    rest = max(0, cols - time_w - proj_w - 4)
+    marker_w = 2 if show_markers else 0
+    rest = max(0, cols - time_w - proj_w - 4 - marker_w)
 
-    for r in range(rows):
+    cur_row = sel[cursor] if (sel and 0 <= cursor < len(sel)) else -1
+
+    for r in range(height):
         idx = top + r
         out.append(CSI + "2K")
-        if idx >= total:
+        if idx >= len(display_rows):
             out.append("\r\n")
             continue
-        m = metas[idx]
-        if idx == cursor:
+        row = display_rows[idx]
+        if row["kind"] == "header":
+            out.append(DIM + pad(row["label"], cols) + RESET + "\r\n")
+            continue
+        m = row["meta"]
+        glyph = row_marker(marks, m["sessionId"]) if show_markers else ""
+        if idx == cur_row:
             line = (
+                f"{glyph}"
                 f"{rel_time(m['lastTs']):>{time_w}}  "
                 f"{pad(project_label(m['cwd']), proj_w)}  "
                 f"{clip(m['title'], rest)}"
@@ -817,25 +979,34 @@ def render(metas, cursor, top, query, sort_mode, rows, cols):
                 m['title'], rest, title_highlights(query, m['title'])
             )
             out.append(
+                f"{glyph}"
                 f"{rel_time(m['lastTs']):>{time_w}}  "
                 f"{pad(project_label(m['cwd']), proj_w)}  "
                 f"{title_frag}"
             )
         out.append("\r\n")
 
-    # Footer: detail of the highlighted row + preview.
+    # Footer line 1: action prompt / transient notice / detail of highlighted row.
     out.append(CSI + "2K")
-    if total and 0 <= cursor < total:
-        m = metas[cursor]
+    if action_mode:
+        out.append(BOLD + clip("· [p]in  [b]ookmark   Esc", cols) + RESET + "\r\n")
+    elif notice:
+        out.append(BOLD + clip("· " + notice, cols) + RESET + "\r\n")
+    elif cur_row >= 0:
+        m = display_rows[cur_row]["meta"]
         detail = m["cwd"] or "?"
         if m["gitBranch"] and m["gitBranch"] != "HEAD":
             detail += f"  ({m['gitBranch']})"
         out.append(DIM + clip("→ " + detail, cols) + RESET + "\r\n")
-        out.append(CSI + "2K")
+    else:
+        out.append(DIM + "no matching sessions" + RESET + "\r\n")
+
+    # Footer line 2: preview of the highlighted row's first prompt / summary.
+    out.append(CSI + "2K")
+    if cur_row >= 0:
+        m = display_rows[cur_row]["meta"]
         preview = m["firstPrompt"] or m["summary"] or ""
         out.append(DIM + clip("  " + preview, cols) + RESET)
-    else:
-        out.append(DIM + "no matching sessions" + RESET + "\r\n" + CSI + "2K")
     out.append(RESET)
     out.append(CSI + "0J")  # clear anything below
     _write("".join(out))
@@ -852,18 +1023,49 @@ def confirm_prompt(message, cols):
     return key in ("y", "Y")
 
 
-def interactive_select(metas, initial_query="", sort_mode="recent", trash_mode=False):
+def interactive_select(metas, initial_query="", sort_mode="recent",
+                       trash_mode=False, marks=None, max_pins=3):
     """Return the chosen meta dict, or None if cancelled."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise RuntimeError("interactive picker needs a TTY (use --list / --json)")
     enable_vt_windows()
+    if marks is None:
+        marks = Marks()
 
     all_metas = metas
     query = initial_query
     sort_idx = SORT_MODES.index(sort_mode) if sort_mode in SORT_MODES else 0
-    view = apply_filter(sort_metas(all_metas, SORT_MODES[sort_idx]), query)
+    action_mode = False
+    notice = None  # transient one-frame footer message
+
+    def build_view():
+        """Recompute (display_rows, sel, view, show_markers) from the current
+        query / sort / marks. Grouping is on only for an empty query with at
+        least one *resolvable* mark; any query flattens to the fuzzy rank."""
+        sorted_all = sort_metas(all_metas, SORT_MODES[sort_idx])
+        show = not trash_mode and bool(marks.pins or marks.saved)
+        if query:
+            rows = build_rows([], [], apply_filter(sorted_all, query), False)
+        else:
+            pinned, saved, others = partition_marked(sorted_all, marks)
+            rows = build_rows(pinned, saved, others, bool(pinned or saved))
+        sel = session_row_indices(rows)
+        view = [rows[i]["meta"] for i in sel]
+        return rows, sel, view, show
+
+    display_rows, sel, view, show_markers = build_view()
     cursor = 0
     top = 0
+
+    def rebuild(keep=None, reset_scroll=True):
+        nonlocal display_rows, sel, view, show_markers, cursor, top
+        display_rows, sel, view, show_markers = build_view()
+        if keep is not None and keep in view:
+            cursor = view.index(keep)
+        elif reset_scroll:
+            cursor = 0
+        if reset_scroll:
+            top = 0
 
     _write(CSI + "?1049h")  # alternate screen buffer
     _write(CSI + "?25l")  # hide cursor
@@ -871,75 +1073,104 @@ def interactive_select(metas, initial_query="", sort_mode="recent", trash_mode=F
         with _RawInput():
             while True:
                 cols, lines = shutil.get_terminal_size((100, 30))
-                rows = max(3, lines - 4)  # header(1) + 2 footer + margin
+                height = max(3, lines - 4)  # header(1) + 2 footer + margin
                 if cursor < 0:
                     cursor = 0
                 if cursor >= len(view):
                     cursor = max(0, len(view) - 1)
-                if cursor < top:
-                    top = cursor
-                elif cursor >= top + rows:
-                    top = cursor - rows + 1
-                # Slide the viewport up when the terminal grows so it stays full.
-                top = min(max(0, top), max(0, len(view) - rows))
+                # Scroll in display-row space so group headers stay on-screen.
+                target = sel[cursor] if (sel and cursor < len(sel)) else 0
+                if target < top:
+                    top = target
+                elif target >= top + height:
+                    top = target - height + 1
+                top = min(max(0, top), max(0, len(display_rows) - height))
 
-                render(view, cursor, top, query, SORT_MODES[sort_idx], rows, cols)
+                render(display_rows, sel, cursor, top, query,
+                       SORT_MODES[sort_idx], height, cols, marks,
+                       show_markers, action_mode, notice, trash_mode)
+                notice = None  # cleared after one rendered frame
 
                 key = read_key()
+
+                if action_mode:
+                    action_mode = False
+                    if view and key in ("p", "b"):
+                        keep = view[cursor]
+                        sid = keep["sessionId"]
+                        if key == "p":
+                            res = marks.toggle_pin(sid, max_pins)
+                            notice = {
+                                "pinned": "pinned",
+                                "unpinned": "unpinned",
+                                "cap": f"{max_pins} pins max — unpin one first",
+                            }[res]
+                        else:
+                            res = marks.toggle_save(sid)
+                            notice = {"saved": "saved", "unsaved": "unsaved"}[res]
+                        if res != "cap":
+                            save_marks(marks)
+                            rebuild(keep=keep)
+                    continue
+
                 if key in (K_ESC, K_CTRLC):
                     return None
                 if key == K_ENTER:
                     if view:
                         return view[cursor]
                     continue
+                if key == ".":
+                    # Leader for the pin/save action mode. Consume it in both
+                    # modes so it never leaks into the filter; in --trash mode
+                    # marks are meaningless, so it is simply a no-op there.
+                    if not trash_mode:
+                        action_mode = True
+                    continue
                 if key == K_UP:
                     cursor -= 1
                 elif key == K_DOWN:
                     cursor += 1
                 elif key == K_PGUP:
-                    cursor -= rows
+                    cursor -= height
                 elif key == K_PGDN:
-                    cursor += rows
+                    cursor += height
                 elif key == K_HOME:
                     cursor = 0
                 elif key == K_END:
                     cursor = len(view) - 1
                 elif key == K_TAB:
                     sort_idx = (sort_idx + 1) % len(SORT_MODES)
-                    keep = view[cursor] if view else None
-                    view = apply_filter(sort_metas(all_metas, SORT_MODES[sort_idx]), query)
-                    cursor = view.index(keep) if keep in view else 0
-                    top = 0
+                    rebuild(keep=view[cursor] if view else None)
                 elif key == K_DEL:
                     if view:
-                        target = view[cursor]
+                        target_meta = view[cursor]
                         verb = "Permanently delete" if trash_mode else "Delete"
-                        if confirm_prompt(f'{verb} "{target["title"]}"? y/N', cols):
+                        if confirm_prompt(f'{verb} "{target_meta["title"]}"? y/N', cols):
                             try:
                                 if trash_mode:
-                                    os.remove(target["path"])
+                                    os.remove(target_meta["path"])
                                 else:
-                                    move_to_trash(target["path"])
+                                    move_to_trash(target_meta["path"])
                             except OSError as e:
                                 sys.stderr.write(f"warning: could not delete session: {e}\n")
                             else:
-                                all_metas.remove(target)
-                                view = apply_filter(
-                                    sort_metas(all_metas, SORT_MODES[sort_idx]), query
-                                )
+                                all_metas.remove(target_meta)
+                                if not trash_mode and marks.drop(target_meta["sessionId"]):
+                                    save_marks(marks)
+                                # Keep the highlight where it was (the row below
+                                # the deleted one slides up under the cursor),
+                                # matching the pre-feature picker: don't reset
+                                # cursor/scroll to the top.
+                                rebuild(reset_scroll=False)
                                 if cursor >= len(view):
                                     cursor = max(0, len(view) - 1)
                 elif key == K_BS:
                     if query:
                         query = query[:-1]
-                        view = apply_filter(sort_metas(all_metas, SORT_MODES[sort_idx]), query)
-                        cursor = 0
-                        top = 0
+                        rebuild()
                 elif isinstance(key, str) and len(key) == 1 and key.isprintable():
                     query += key
-                    view = apply_filter(sort_metas(all_metas, SORT_MODES[sort_idx]), query)
-                    cursor = 0
-                    top = 0
+                    rebuild()
     finally:
         _write(CSI + "?25h")  # show cursor
         _write(CSI + "?1049l")  # leave alternate screen
@@ -1010,6 +1241,7 @@ def build_parser():
     p.add_argument("--no-launch", action="store_true", help="print the cd + resume command instead of launching")
     p.add_argument("--trash", action="store_true", help="browse trash instead of live sessions (Enter restores, Delete permanently removes)")
     p.add_argument("--purge-after", type=int, default=30, metavar="N", help="trash retention in days before auto-purge (default: 30)")
+    p.add_argument("--max-pins", type=int, default=3, metavar="N", help="maximum pinned sessions (default: 3)")
     return p
 
 
@@ -1037,6 +1269,7 @@ def main(argv=None):
         metas = [m for m in metas if m["cwd"] and needle in m["cwd"].lower()]
 
     metas = sort_metas(metas, args.sort)
+    marks = Marks() if args.trash else load_marks()
     query = " ".join(args.query)
 
     # Non-interactive output: filter by query first, then apply the limit.
@@ -1045,10 +1278,16 @@ def main(argv=None):
             metas = apply_filter(metas, query)
         if args.limit and args.limit > 0:
             metas = metas[: args.limit]
+        show_markers = bool(marks.pins or marks.saved)
         if args.json:
-            print(json.dumps(metas, indent=2))
+            out = [
+                dict(m, pinned=marks.is_pinned(m["sessionId"]),
+                     saved=marks.is_saved(m["sessionId"]))
+                for m in metas
+            ]
+            print(json.dumps(out, indent=2))
         else:
-            print_list(metas)
+            print_list(metas, marks=marks, show_markers=show_markers)
         return 0
 
     # Interactive: filtering happens live inside the picker, so pass the full
@@ -1059,7 +1298,8 @@ def main(argv=None):
 
     try:
         chosen = interactive_select(
-            metas, initial_query=query, sort_mode=args.sort, trash_mode=args.trash
+            metas, initial_query=query, sort_mode=args.sort, trash_mode=args.trash,
+            marks=marks, max_pins=args.max_pins,
         )
     except RuntimeError as e:
         sys.stderr.write(str(e) + "\n")
